@@ -91,29 +91,38 @@ backup(orig) 的字段查询整体推迟，使畸形 context 的失败路径不�
 > 字段数不足（缺少 `:`）的输入仍会在切分处早退 —— 这类输入与等长探针对的形态不同，
 > 不在成对测量的覆盖范围内。
 
-#### 启用开关与权衡（重要）
+#### 上游已经修过这条路径（重要）
 
-信号 D 默认开启，可用 `SIDECHAN_D=0` 关闭。开启前请先读这段：
+动手之前先看这段：**tiann/KernelSU 已经处理过同一个探针，而且结论与信号 D 的方向相反。**
 
-**A 与 B 在干净内核上本来就不等时。** 原生 `selinux_setprocattr()` 里 B（换行前缀）
-同样短路到 `prepare_creds()/abort_creds()`，A（非法类型）同样在解析内部 early-return。
-也就是说报告里 `A=417ns / B=521ns / A<B 507` 的形态，**stock 内核原样复现**：
+- **PR #3981** `fix(kernel): parse setprocattr context once in selinux hide`
+  （genie1997，2026-11-09 合并）。描述里的探针与这里完全一致：A = 40 字节非法类型，
+  B = 同长度以换行开头。作者原话："On stock the newline write pays for
+  `prepare_creds()`/`abort_creds()` and the invalid type fails well before that."
+  修法是**恢复 `str[0] != '\n'` 短路 + 单次解析**（`security_context_to_sid_live`），
+  只在 type mark stale（`-EAGAIN`）时才回退 dual parse。
+- **Issue #3941**（Android 17 / 6.18，Duck Detector）报 `+188 ns`、`aSlower 13/16`；
+  **PR #3938**（0ctobot，未合并）给出 `+78 → −43 ns`、`+105 → −52 ns` 对照，并写明
+  "reduces avoidable timing overhead without guaranteeing timing equality"。
+- **PR #3936**（已合并）把字段切分与双策略查找收进一次 pass；**PR #3877**（已合并）
+  处理 MLS 阶段。
 
-- 只数方向（`either direction > 3 × (opposite + ties)`）时，干净内核对这对探针同样判
-  danger —— 这项检测在当前形态下没有区分力，方向只是噪声。
-- 因此**任何**把 A/B 拉平的改动，都必然在绝对值上与 stock 分叉：stock 的 B 在 521ns 量级，
-  改后掉到 417ns 量级。若检测器除了方向还做「与同版本 stock 基线比对」，信号 D 反而会
-  交出比不改更强的信号。
+`main` 现在已包含 #3981 —— 也就是说 `my_setprocattr()` 里
+`if (size && str[0] && str[0] != '\n')` 这行**是上游修完的结果，不是遗留缺陷**。
 
-按检测形态选：
+#### 所以信号 D 默认关闭
+
+信号 D 做的恰好是反方向：把换行前缀也拽进解析层、三字段恒查。那会让 hooked 路径
+进一步偏离 stock —— 上游实测 stock 上 B 比 A 慢 700~800 ns，把 B 压到 A 的水平等于
+在绝对延迟上自报身份。
 
 | 检测器形态 | 建议 |
 |---|---|
-| 只看方向计数 / 纯 ABBA 分组 | 开 `SIDECHAN_D=1`（默认），方向差归零 |
-| 会与同版本干净内核基线比较 | 关 `SIDECHAN_D=0`。此时 KSU 与 stock 在 A/B 上逐位对齐，本就没有可测差异，不需要动 |
-| 不确定 | 先关，用同一把测量工具在 stock 与 KSU 内核上各跑一遍再做决定 |
+| 拿报告里的方向阈值来判 | 先确认内核 `my_setprocattr` 是否已带 `str[0] != '\n'` 短路。带了就别开 D —— 你的 `A<B` 就是 stock 的形状 |
+| 确实需要方向差归零 | `SIDECHAN_D=1` 显式打开 |
+| 会与同版本编译的 stock 基线比较 | 一律 `SIDECHAN_D=0`（默认） |
 
-真正要"修复"这条检测，正确落点在判定侧：用 stock 基线校准（`z = (A−B − baseline_med) /
+真正要"修复"这条检测，落点在判定侧：用 stock 基线校准（`z = (A−B − baseline_med) /
 baseline_iqr`），或改用同构的探针对。探针对本身不对称时，方向计数没有判别力。
 
 ## 为什么不自动修信号 A

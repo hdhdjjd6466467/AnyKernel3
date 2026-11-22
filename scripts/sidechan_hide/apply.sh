@@ -68,8 +68,10 @@ fail() {
 HOOK_FILE="$KSU_DIR/kernel/hook/syscall_hook_manager.c"
 HIDE_FILE="$KSU_DIR/kernel/feature/selinux_hide.c"
 SIDECHAN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# 信号 D 默认开启；SIDECHAN_D=0 关闭（详见 README.md「启用开关与权衡」）。
-SIDECHAN_D="${SIDECHAN_D:-1}"
+# 信号 D 默认关闭：上游 PR #3981（2026-11-09 合并）已把 setprocattr 路径对齐 stock，
+# 再叠加本补丁会反向偏离。仅在检测器只数方向、且真机确认需要时用 SIDECHAN_D=1 打开。
+# 详见 README.md「启用开关与权衡」。
+SIDECHAN_D="${SIDECHAN_D:-0}"
 
 # ---------------------------------------------------------------------------
 # 信号 C：tracepoint 层 allow-uid 门控（newfstatat / faccessat）
@@ -195,7 +197,7 @@ fi
 # 分配/释放；再加上字段失败深度不同，方向计数会一边倒。
 D_MARK='侧信道加固（信号 D）：原生内核在 str[0]'
 if [ "$SIDECHAN_D" != "1" ]; then
-  echo "信号 D 已按 SIDECHAN_D=$SIDECHAN_D 关闭（attr/current 失败路径保持与原生一致）"
+  echo "信号 D 已按 SIDECHAN_D=$SIDECHAN_D 关闭（保持与 stock 一致；上游 #3981 已对齐该路径）"
 elif [ -f "$HIDE_FILE" ] && grep -q 'my_setprocattr' "$HIDE_FILE" \
   && grep -q 'backup_string_to_context_struct' "$HIDE_FILE"; then
   if grep -qF "$D_MARK" "$HIDE_FILE"; then
