@@ -15,7 +15,7 @@ SELinux 查询 / syscall 的**返回值**，却没有抹平产生这些返回值
 | **A** 策略发布竞态 | `kernel/selinux/rules.c`、`kernel/selinux/sepolicy.c` | `apply_kernelsu_rules()` 发布新策略时 `latest_granting` 代际推进，live 与 backup 在一个窗口内不一致 → `security_context_to_sid_live()` 返回 `-EAGAIN` → 回退 backup 重解析。重载窗口内出现干净内核没有的瞬态尾延迟/重试。 | **不改**（仅 `::notice` 提示）。见下文。 |
 | **B** 无效上下文冗余解析 | `kernel/feature/selinux_hide.c` `string_to_context_struct()` | live 策略的 MLS 解析失败后，仍对 backup(orig) 策略多跑一次 `mls_context_to_sid()` + MLS 后缀 `memcpy`，其结果在 `out:` 处被丢弃。喂畸形 context，被 hook 的内核比干净内核拒绝得更慢。 | **已修**：`if (orig_valid)` → `if (orig_valid && !rc)`。 |
 | **C** syscall dispatcher 固定开销 | `kernel/hook/syscall_hook_manager.c` `ksu_sys_enter_handler()` + `kernel/feature/sucompat.c` | `newfstatat`/`faccessat` 高频 syscall 对**所有**进程都被重定向进 KSU dispatcher，再在 sucompat 处理函数里按 allow-uid 提前返回。普通 App 每次都多付一段固定的 dispatcher 往返开销，最适合被动、纯无特权检测。 | **已修**：把 allow-uid 判定上提到 tracepoint，非授权进程走原生快路径。 |
-| **D** `attr/current` 失败路径不等时 | `kernel/feature/selinux_hide.c` `my_setprocattr()` / `backup_string_to_context_struct()` / `string_to_context_struct()` | 成对写 `/proc/self/attr/current`：A=非法类型，B=换行前缀，两者都必须返回 `-EINVAL`。B 原生在 `str[0] != '\n'` 处短路，落到 `prepare_creds()/abort_creds()`；A 在解析内部 early-return。两条失败路径差一次 cred 分配/释放，再叠加字段失败深度差，方向计数一边倒。 | **已修**：换行前缀不再短路、三字段恒查、backup 字段查询推迟到 live 全通过之后。 |
+| **D** `attr/current` 换行前缀 vs 非法类型 | `kernel/feature/selinux_hide.c` `my_setprocattr()` | 成对写 `/proc/self/attr/current`：A=非法类型，B=换行前缀，两者都返回 `-EINVAL`。B 在 stock 上走 `prepare_creds()/abort_creds()`，A 在解析内部 early-return，差值 700~800 ns。 | **不改**：上游 PR #3981 已把该路径对齐 stock（保留短路 + 单次解析），main 已含该修复。详见下文。 |
 
 ## 已应用的改动
 
@@ -59,71 +59,47 @@ if (orig_valid && !rc) { /* KSU_SIDECHAN_B_GUARD */   // 原: if (orig_valid) {
 - 该文件作者本就在时序上对齐原生（见函数内 "Match native early return…" 注释）；本补丁
   把这一思路补到了 MLS 阶段。
 
-> 残留：本补丁只关闭 MLS 阶段的重复解析。字段阶段的冗余（每个字段对 live/backup 各查一次，
-> 以及首次失败即返回造成的失败深度差）由信号 D 一并处理。
+> 残留：本补丁只关闭 MLS 阶段的重复解析。字段阶段的冗余由上游 #3936 处理（一次 pass
+> 同查两个策略），attr/current 路径由 #3981 对齐 stock。
 
-### 信号 D — `kernel/feature/selinux_hide.c`
+### 信号 D — attr/current：**不改**，上游已处理
 
-三条改动，全部只落在失败路径：
-
-1. **`my_setprocattr()`**：`if (size && str[0] && str[0] != '\n')` → `if (size && str[0])`。
-   换行开头的输入不再短路到 `prepare_creds()`/`abort_creds()`，而是同样进入解析层。
-   返回码仍是 `-EINVAL`（`sid` 保持 0），语义不变。
-2. **`backup_string_to_context_struct()`**：user / role / type 三个字段一律查完再判失败，
-   失败成本不再取决于首次失败的字段位置。
-3. **`string_to_context_struct()`**：同样三字段恒查；并把 backup(orig) 策略的字段查询
-   推迟到 live 三字段全部通过之后。live 失败时 orig 结果本来就在 `out:` 被丢弃，推迟
-   不改变任何可观察行为；live 成功时查询结果与原先完全一致。
-
-改动前后两条失败路径的成本结构：
-
-| 探针 | 改动前 | 改动后 |
-|---|---|---|
-| A 非法类型 | perm → kmemdup → user/role 命中、type 失败即 return（2 次命中 + 1 次未命中） | perm → kmemdup → 三字段恒查 → return |
-| B 换行前缀 | perm → `prepare_creds()` → `abort_creds()`（0 次查找） | perm → kmemdup → 三字段恒查 → return |
-
-两条路径都终止在解析层、都付相同次数的哈希查找，方向计数不再一边倒。
-`string_to_context_struct()`（setxattr 的 dual-parse 入口）同步改造，另外把
-backup(orig) 的字段查询整体推迟，使畸形 context 的失败路径不再多付两次查找。
-
-> 这不是「给 B 加延迟」，而是把 B 从 cred 分配路径挪到解析路径，并把 A 的失败深度归一。
-> 合法 context（`rc == 0`）的路径与耗时完全不变。
-> 字段数不足（缺少 `:`）的输入仍会在切分处早退 —— 这类输入与等长探针对的形态不同，
-> 不在成对测量的覆盖范围内。
-
-#### 上游已经修过这条路径（重要）
-
-动手之前先看这段：**tiann/KernelSU 已经处理过同一个探针，而且结论与信号 D 的方向相反。**
+早前版本曾在这里用「把换行前缀也拽进解析层 + 三字段恒查」把 A/B 拉平。方向是错的，
+补丁已移除，保留这段记录：
 
 - **PR #3981** `fix(kernel): parse setprocattr context once in selinux hide`
-  （genie1997，2026-11-09 合并）。描述里的探针与这里完全一致：A = 40 字节非法类型，
+  （genie1997，2026-11-09 合并）。探针与本目录描述完全一致：A = 40 字节非法类型，
   B = 同长度以换行开头。作者原话："On stock the newline write pays for
   `prepare_creds()`/`abort_creds()` and the invalid type fails well before that."
-  修法是**恢复 `str[0] != '\n'` 短路 + 单次解析**（`security_context_to_sid_live`），
-  只在 type mark stale（`-EAGAIN`）时才回退 dual parse。
-- **Issue #3941**（Android 17 / 6.18，Duck Detector）报 `+188 ns`、`aSlower 13/16`；
-  **PR #3938**（0ctobot，未合并）给出 `+78 → −43 ns`、`+105 → −52 ns` 对照，并写明
-  "reduces avoidable timing overhead without guaranteeing timing equality"。
-- **PR #3936**（已合并）把字段切分与双策略查找收进一次 pass；**PR #3877**（已合并）
-  处理 MLS 阶段。
+- 修法：**保留 `str[0] != '\n'` 短路**，解析改成单次 `security_context_to_sid_live()`，
+  只在 type mark stale（`-EAGAIN`）时回退 dual parse。
+- 实测（4096 对，64×64 批量均值）：
 
-`main` 现在已包含 #3981 —— 也就是说 `my_setprocattr()` 里
-`if (size && str[0] && str[0] != '\n')` 这行**是上游修完的结果，不是遗留缺陷**。
+  | A−B | Before | After |
+  |---|---|---|
+  | CPU0 hooked | −4 / −4 ns | **−864 / −833 ns** |
+  | CPU0 stock 路径（同一次开机） | −384 ns | **−776 ns** |
+  | CPU4 hooked | +1 / −6 ns | −81 / −78 ns |
 
-#### 所以信号 D 默认关闭
+`main` 已包含 #3981，所以 `my_setprocattr()` 里
+`if (size && str[0] && str[0] != '\n')` **是上游修完的结果，不是遗留缺陷** —— 本脚本
+保持这条路径原样，一个字节都不动。
 
-信号 D 做的恰好是反方向：把换行前缀也拽进解析层、三字段恒查。那会让 hooked 路径
-进一步偏离 stock —— 上游实测 stock 上 B 比 A 慢 700~800 ns，把 B 压到 A 的水平等于
-在绝对延迟上自报身份。
+#### 其它相关讨论
 
-| 检测器形态 | 建议 |
-|---|---|
-| 拿报告里的方向阈值来判 | 先确认内核 `my_setprocattr` 是否已带 `str[0] != '\n'` 短路。带了就别开 D —— 你的 `A<B` 就是 stock 的形状 |
-| 确实需要方向差归零 | `SIDECHAN_D=1` 显式打开 |
-| 会与同版本编译的 stock 基线比较 | 一律 `SIDECHAN_D=0`（默认） |
+| 条目 | 状态 | 内容 |
+|---|---|---|
+| Issue #3941 | closed | Android 17 / 6.18 + Duck Detector：`+188 ns`、`aSlower 13/16`；无 root 时 16/16 落零块 |
+| PR #3938 | **未合并** | 0ctobot：`+78 → −43 ns`、`+105 → −52 ns`；128 字节栈缓冲替掉 `kmemdup`；先验 backup 再碰 live；自述"不保证时序相等" |
+| PR #3936 | 已合并 | 字段切分与双策略查找收进一次 pass，MLS 后缀按需还原 |
+| PR #3877 | 已合并 | MLS 阶段（本目录信号 B 的同源修复） |
+| PR #3965 | open (WIP) | Align policy-load notifications，对应信号 A |
 
-真正要"修复"这条检测，落点在判定侧：用 stock 基线校准（`z = (A−B − baseline_med) /
-baseline_iqr`），或改用同构的探针对。探针对本身不对称时，方向计数没有判别力。
+#### 想靠内核侧消除这条检测，走不通
+
+探针对本身不对称：stock 上 B 走 cred 分配、A 在解析里早退，差值 700~800 ns。任何把
+A/B 拉平的改动都必然在绝对延迟上与 stock 分叉。判定侧才是正确落点：用同版本 stock
+基线的 `z = (A−B − baseline_med) / baseline_iqr`，或换同构探针对。
 
 ## 为什么不自动修信号 A
 
