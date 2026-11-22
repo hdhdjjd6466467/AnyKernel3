@@ -29,6 +29,9 @@
 #           快路径，消除该固定开销（检测 App 自身恰好是非授权进程）。
 #   * 修 B：给 backup 解析加 `!rc` 守卫，live 解析一旦失败就不再多跑一次
 #           backup 解析，使非法路径与原生内核一样只解析一次。
+#   * 修 D：attr/current 写路径等时化 —— 换行前缀不再短路到 cred 分配出口，
+#           user/role/type 三个字段的查找固定走完，backup 策略的字段查询推迟到
+#           live 三字段全部通过之后。失败路径的耗时因此与首次失败的字段无关。
 #   * 不动 A：策略重载竞态属于 policy_mutex 下的 RCU/代际时序重设计，盲改有
 #           开机失败 / SELinux 判定错误的风险，必须在真机配合测量工具迭代验证，
 #           故本脚本仅提示、不改动。详见 README.md。
@@ -64,6 +67,9 @@ fail() {
 
 HOOK_FILE="$KSU_DIR/kernel/hook/syscall_hook_manager.c"
 HIDE_FILE="$KSU_DIR/kernel/feature/selinux_hide.c"
+SIDECHAN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 信号 D 默认开启；SIDECHAN_D=0 关闭（详见 README.md「启用开关与权衡」）。
+SIDECHAN_D="${SIDECHAN_D:-1}"
 
 # ---------------------------------------------------------------------------
 # 信号 C：tracepoint 层 allow-uid 门控（newfstatat / faccessat）
@@ -181,8 +187,36 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 信号 D：attr/current 写路径等时化（换行前缀 vs 非法字段）
+# ---------------------------------------------------------------------------
+# 检测方式：成对写 /proc/self/attr/current，A=非法类型、B=换行前缀，两者都
+# 必须返回 -EINVAL。若内核把换行首字节短路到 prepare_creds()/abort_creds() 的
+# 失败出口，而非法字段在解析内部 early-return，两条失败路径就差一次 cred
+# 分配/释放；再加上字段失败深度不同，方向计数会一边倒。
+D_MARK='侧信道加固（信号 D）：原生内核在 str[0]'
+if [ "$SIDECHAN_D" != "1" ]; then
+  echo "信号 D 已按 SIDECHAN_D=$SIDECHAN_D 关闭（attr/current 失败路径保持与原生一致）"
+elif [ -f "$HIDE_FILE" ] && grep -q 'my_setprocattr' "$HIDE_FILE" \
+  && grep -q 'backup_string_to_context_struct' "$HIDE_FILE"; then
+  if grep -qF "$D_MARK" "$HIDE_FILE"; then
+    echo "selinux_hide.c 已含信号 D 等时化，跳过"
+  elif [ ! -f "$SIDECHAN_DIR/patch_d.py" ]; then
+    fail "缺少信号 D 补丁脚本: $SIDECHAN_DIR/patch_d.py"
+  else
+    echo "应用信号 D 补丁：attr/current 失败路径等时化..."
+    python3 "$SIDECHAN_DIR/patch_d.py" "$HIDE_FILE" \
+      || fail "信号 D 补丁应用失败（selinux_hide.c 锚点不匹配，上游结构可能已变化）"
+    grep -qF "$D_MARK" "$HIDE_FILE" \
+      || fail "信号 D 补丁应用后校验失败 (selinux_hide.c)"
+    echo "信号 D 已修复：换行前缀与非法字段走同构失败路径，失败深度不再可测"
+  fi
+else
+  echo "selinux_hide.c 不存在或无 attr/current 解析入口，跳过信号 D 补丁"
+fi
+
+# ---------------------------------------------------------------------------
 # 信号 A：仅提示，不改动（见 README.md）
 # ---------------------------------------------------------------------------
 echo "::notice title=信号 A 未处理::策略发布竞态（rules.c/sepolicy.c 的 -EAGAIN 重载窗口）需真机配合测量工具迭代，本脚本不盲改，详见 scripts/sidechan_hide/README.md"
 
-echo "隐藏层计时侧信道加固补丁处理完成（已处理 B/C，A 仅提示）"
+echo "隐藏层计时侧信道加固补丁处理完成（已处理 B/C/D，A 仅提示）"

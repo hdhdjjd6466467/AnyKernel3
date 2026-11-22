@@ -1,4 +1,4 @@
-# 隐藏层「计时侧信道」加固（signal B/C）
+# 隐藏层「计时侧信道」加固（signal B/C/D）
 
 针对一份 KernelSU/SukiSU 隐藏机制侧信道检测报告的内核侧修复。隐藏层改写了
 SELinux 查询 / syscall 的**返回值**，却没有抹平产生这些返回值所花的**时间**；
@@ -8,13 +8,14 @@ SELinux 查询 / syscall 的**返回值**，却没有抹平产生这些返回值
 `sukisu_compat` / SUSFS 补丁**之后**）对最终形态的 KSU 源码打补丁，内容检测守卫、
 可重复执行幂等。仅对 `ksu_variant == 'SukiSU-Nova'` 生效。
 
-## 三条信号与处理
+## 四条信号与处理
 
 | 信号 | 位置 | 机理 | 本补丁 |
 |---|---|---|---|
 | **A** 策略发布竞态 | `kernel/selinux/rules.c`、`kernel/selinux/sepolicy.c` | `apply_kernelsu_rules()` 发布新策略时 `latest_granting` 代际推进，live 与 backup 在一个窗口内不一致 → `security_context_to_sid_live()` 返回 `-EAGAIN` → 回退 backup 重解析。重载窗口内出现干净内核没有的瞬态尾延迟/重试。 | **不改**（仅 `::notice` 提示）。见下文。 |
 | **B** 无效上下文冗余解析 | `kernel/feature/selinux_hide.c` `string_to_context_struct()` | live 策略的 MLS 解析失败后，仍对 backup(orig) 策略多跑一次 `mls_context_to_sid()` + MLS 后缀 `memcpy`，其结果在 `out:` 处被丢弃。喂畸形 context，被 hook 的内核比干净内核拒绝得更慢。 | **已修**：`if (orig_valid)` → `if (orig_valid && !rc)`。 |
 | **C** syscall dispatcher 固定开销 | `kernel/hook/syscall_hook_manager.c` `ksu_sys_enter_handler()` + `kernel/feature/sucompat.c` | `newfstatat`/`faccessat` 高频 syscall 对**所有**进程都被重定向进 KSU dispatcher，再在 sucompat 处理函数里按 allow-uid 提前返回。普通 App 每次都多付一段固定的 dispatcher 往返开销，最适合被动、纯无特权检测。 | **已修**：把 allow-uid 判定上提到 tracepoint，非授权进程走原生快路径。 |
+| **D** `attr/current` 失败路径不等时 | `kernel/feature/selinux_hide.c` `my_setprocattr()` / `backup_string_to_context_struct()` / `string_to_context_struct()` | 成对写 `/proc/self/attr/current`：A=非法类型，B=换行前缀，两者都必须返回 `-EINVAL`。B 原生在 `str[0] != '\n'` 处短路，落到 `prepare_creds()/abort_creds()`；A 在解析内部 early-return。两条失败路径差一次 cred 分配/释放，再叠加字段失败深度差，方向计数一边倒。 | **已修**：换行前缀不再短路、三字段恒查、backup 字段查询推迟到 live 全通过之后。 |
 
 ## 已应用的改动
 
@@ -58,9 +59,62 @@ if (orig_valid && !rc) { /* KSU_SIDECHAN_B_GUARD */   // 原: if (orig_valid) {
 - 该文件作者本就在时序上对齐原生（见函数内 "Match native early return…" 注释）；本补丁
   把这一思路补到了 MLS 阶段。
 
-> 残留：用户 / 角色 / 类型三个字段仍对 live 与 backup 两套 symtab 各查一次，畸形在更早字段
-> 的 context 仍可能有可测差异。完全等时化需要进一步的 constant-work 改造并在真机上以测量
-> 工具验证，本补丁只关闭报告点名的 MLS 阶段冗余。
+> 残留：本补丁只关闭 MLS 阶段的重复解析。字段阶段的冗余（每个字段对 live/backup 各查一次，
+> 以及首次失败即返回造成的失败深度差）由信号 D 一并处理。
+
+### 信号 D — `kernel/feature/selinux_hide.c`
+
+三条改动，全部只落在失败路径：
+
+1. **`my_setprocattr()`**：`if (size && str[0] && str[0] != '\n')` → `if (size && str[0])`。
+   换行开头的输入不再短路到 `prepare_creds()`/`abort_creds()`，而是同样进入解析层。
+   返回码仍是 `-EINVAL`（`sid` 保持 0），语义不变。
+2. **`backup_string_to_context_struct()`**：user / role / type 三个字段一律查完再判失败，
+   失败成本不再取决于首次失败的字段位置。
+3. **`string_to_context_struct()`**：同样三字段恒查；并把 backup(orig) 策略的字段查询
+   推迟到 live 三字段全部通过之后。live 失败时 orig 结果本来就在 `out:` 被丢弃，推迟
+   不改变任何可观察行为；live 成功时查询结果与原先完全一致。
+
+改动前后两条失败路径的成本结构：
+
+| 探针 | 改动前 | 改动后 |
+|---|---|---|
+| A 非法类型 | perm → kmemdup → user/role 命中、type 失败即 return（2 次命中 + 1 次未命中） | perm → kmemdup → 三字段恒查 → return |
+| B 换行前缀 | perm → `prepare_creds()` → `abort_creds()`（0 次查找） | perm → kmemdup → 三字段恒查 → return |
+
+两条路径都终止在解析层、都付相同次数的哈希查找，方向计数不再一边倒。
+`string_to_context_struct()`（setxattr 的 dual-parse 入口）同步改造，另外把
+backup(orig) 的字段查询整体推迟，使畸形 context 的失败路径不再多付两次查找。
+
+> 这不是「给 B 加延迟」，而是把 B 从 cred 分配路径挪到解析路径，并把 A 的失败深度归一。
+> 合法 context（`rc == 0`）的路径与耗时完全不变。
+> 字段数不足（缺少 `:`）的输入仍会在切分处早退 —— 这类输入与等长探针对的形态不同，
+> 不在成对测量的覆盖范围内。
+
+#### 启用开关与权衡（重要）
+
+信号 D 默认开启，可用 `SIDECHAN_D=0` 关闭。开启前请先读这段：
+
+**A 与 B 在干净内核上本来就不等时。** 原生 `selinux_setprocattr()` 里 B（换行前缀）
+同样短路到 `prepare_creds()/abort_creds()`，A（非法类型）同样在解析内部 early-return。
+也就是说报告里 `A=417ns / B=521ns / A<B 507` 的形态，**stock 内核原样复现**：
+
+- 只数方向（`either direction > 3 × (opposite + ties)`）时，干净内核对这对探针同样判
+  danger —— 这项检测在当前形态下没有区分力，方向只是噪声。
+- 因此**任何**把 A/B 拉平的改动，都必然在绝对值上与 stock 分叉：stock 的 B 在 521ns 量级，
+  改后掉到 417ns 量级。若检测器除了方向还做「与同版本 stock 基线比对」，信号 D 反而会
+  交出比不改更强的信号。
+
+按检测形态选：
+
+| 检测器形态 | 建议 |
+|---|---|
+| 只看方向计数 / 纯 ABBA 分组 | 开 `SIDECHAN_D=1`（默认），方向差归零 |
+| 会与同版本干净内核基线比较 | 关 `SIDECHAN_D=0`。此时 KSU 与 stock 在 A/B 上逐位对齐，本就没有可测差异，不需要动 |
+| 不确定 | 先关，用同一把测量工具在 stock 与 KSU 内核上各跑一遍再做决定 |
+
+真正要"修复"这条检测，正确落点在判定侧：用 stock 基线校准（`z = (A−B − baseline_med) /
+baseline_iqr`），或改用同构的探针对。探针对本身不对称时，方向计数没有判别力。
 
 ## 为什么不自动修信号 A
 
@@ -86,7 +140,10 @@ SELinux 判定关键路径，**盲改**（无法在本地编译、无法在真�
    分布，应不再有固定偏移。
 3. **信号 B**：喂畸形 context 触发 `setxattr`/`context_to_sid` 路径，成对计时对比，失败
    路径应与干净内核一致。
-4. **信号 A**：在 `load_policy` / 策略重载窗口附近高频探测，确认（或量化残留的）瞬态尾延迟。
+4. **信号 D**：成对写 `/proc/self/attr/current`：A=非法类型、B=换行前缀（等长），各 512 对
+   AB/BA 交替、32 次预热。修复后两者都应在解析层返回 `-EINVAL`，方向计数应收敛到
+   `3 × (反向 + ties)` 以内，block 分布从 `0/16/0` 变成接近 `8/8/0`。
+5. **信号 A**：在 `load_policy` / 策略重载窗口附近高频探测，确认（或量化残留的）瞬态尾延迟。
 
 > 重要：请保留可恢复路径（fastboot 可刷回的 boot/init_boot 备份）。改动涉及 syscall
 > 热路径与 SELinux 解析路径，务必先在可恢复的设备上验证再日常使用。
