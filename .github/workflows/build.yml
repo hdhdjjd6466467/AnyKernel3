@@ -754,6 +754,14 @@ jobs:
           SUB_LEVEL: ${{ inputs.sub_level }}
         run: bash "$GITHUB_WORKSPACE/scripts/susfs_fixes/apply.sh"
           
+      # 隐藏层「计时侧信道」加固（信号 B/C）：须在 SukiSU-Nova 兼容补丁与 SUSFS
+      # 补丁之后执行，使其作用于最终形态的 KSU 源码，避免与前序 unified-diff 冲突。
+      # 以内容检测守卫、幂等；A（策略发布竞态）仅提示不改，详见脚本内注释。
+      - name: 应用隐藏层计时侧信道加固补丁 (信号 B/C)
+        if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU'
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: bash "$GITHUB_WORKSPACE/scripts/sidechan_hide/apply.sh" KernelSU
+
       - name: 克隆 Droidspaces 补丁仓库
         if: inputs.droidspaces != 'off'
         run: |
