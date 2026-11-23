@@ -14,6 +14,8 @@ set -euo pipefail
 
 KROOT="${KERNEL_ROOT:-.}"
 F="$KROOT/common/security/selinux/selinuxfs.c"
+# 少数树把 security/ 直接放在根下（Kleaf 快照 / 老布局）
+[ -f "$F" ] || F="$KROOT/security/selinux/selinuxfs.c"
 
 fail() {
   if [ "${SKIP_INCOMPATIBLE:-false}" = "true" ]; then
