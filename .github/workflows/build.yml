@@ -762,6 +762,12 @@ jobs:
         working-directory: ${{ env.KERNEL_ROOT }}
         run: bash "$GITHUB_WORKSPACE/scripts/sidechan_hide/apply.sh" KernelSU
 
+      # /sys/fs/selinux/access 回复里的 avd.seqno 归一化：报告里 SELinux 卡片唯一的 DANGER
+      # 判据就是 Non-initial avdSeqNo（开机写布尔值推进的代际）。只改回复字段，不改判定。
+      - name: 归一化 avd.seqno（Duck Detector DirtySepolicy）
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: bash "${GITHUB_WORKSPACE}/scripts/avdseqno_fix/apply.sh"
+
       # attr/current 读取侧伪装：SELinux 隐藏只做了写入方向，读取方向仍会交出真实
       # u:r:su:s0 / u:r:ksu:s0。这里在 selinux_getprocattr 上补对偶处理，非授权 uid
       # 读到的可疑标签一律换成 untrusted_app；不改 sucompat，su 命令照常可用。
