@@ -131,7 +131,6 @@ on:
       use_net_enhance:
         required: true
         type: boolean
-        default: false
       use_kpm:
         required: false
         type: boolean

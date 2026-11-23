@@ -321,11 +321,8 @@ on:
         default: ""
 
       # ==================== 选项配置 ====================
-      use_kpm:
-        description: "KPM 功能（仅SukiSU-Nova支持，开启未修补）"
-        required: false
-        type: boolean
-        default: false
+      # 注意：workflow_dispatch 最多 25 个 inputs。KPM 一直是 false（未修补），
+      # 从界面移除，在下方 with: 里硬编码为 false，把配额让给 hwid_lock。
       droidspaces:
         description: "Droidspaces 容器支持 (5.10~6.6: 槽位补丁, 6.12: 开/关；带 NTSync 的选项会同时注入 NTSync)"
         required: false
@@ -577,7 +574,7 @@ jobs:
       use_zram: ${{ inputs.use_zram }}
       use_bbg: ${{ inputs.use_bbg }}
       use_net_enhance: ${{ inputs.use_net_enhance }}
-      use_kpm: ${{ inputs.use_kpm || false }}
+      use_kpm: false
       use_rekernel: ${{ inputs.use_rekernel || false }}
       use_nomount: ${{ inputs.use_nomount || false }}
       cve_2026_43499_patch: ${{ inputs.cve_2026_43499_patch }}
@@ -603,7 +600,7 @@ jobs:
       use_bbg: ${{ inputs.use_bbg }}
       use_net_enhance: ${{ inputs.use_net_enhance }}
       use_rekernel: ${{ inputs.use_rekernel }}
-      use_kpm: ${{ inputs.use_kpm }}
+      use_kpm: false
       cve_2026_43499_patch: ${{ inputs.cve_2026_43499_patch }}
       skip_incompatible: ${{ inputs.skip_incompatible || false }}
       droidspaces: ${{ startsWith(inputs.droidspaces, '678') && '678' || startsWith(inputs.droidspaces, '123') && '123' || startsWith(inputs.droidspaces, '345') && '345' || 'off' }}

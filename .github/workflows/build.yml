@@ -68,19 +68,15 @@ on:
       use_zram:
         required: true
         type: boolean
-        default: true
       use_bbg:
         required: true
         type: boolean
-        default: true
       use_net_enhance:
         required: true
         type: boolean
-        default: false
       use_kpm:
         required: true
         type: boolean
-        default: false
       use_rekernel:
         required: false
         type: boolean
@@ -96,7 +92,6 @@ on:
       enable_susfs:
         required: true
         type: boolean
-        default: true
       ksu_mode:
         required: false
         type: string
