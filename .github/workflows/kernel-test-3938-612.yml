@@ -1,4 +1,4 @@
-name: 内核构建 - 时序等时化 (Android 17 / 6.12)
+name: 内核构建 - Android 16 (6.12)
 
 permissions:
   contents: write
