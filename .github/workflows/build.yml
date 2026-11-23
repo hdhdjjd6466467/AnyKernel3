@@ -117,10 +117,10 @@ on:
         type: boolean
         default: true
       sidechan_3938:
-        description: "应用 PR #3938 方案（先 backup 再 live + 栈缓冲），单独测试用"
+        description: "应用 PR #3938 的栈缓冲做法（128B 内 context 免 kmalloc），默认开"
         required: false
         type: boolean
-        default: false
+        default: true
       sidechan_equalize:
         description: "KSU 类型在类型阶段按未知类型处理，消除 KSU/非法 context 的时序差（默认开）"
         required: false
