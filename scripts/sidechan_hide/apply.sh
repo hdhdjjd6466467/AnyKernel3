@@ -213,7 +213,7 @@ echo "信号 D 不处理：上游 PR #3981 已把 setprocattr 对齐 stock，本
 #   sidtab_freeze/-ESTALE 重试同构。策略内容、SID 分配、隐藏语义均不变。
 # ---------------------------------------------------------------------------
 RULES_FILE="$KSU_DIR/kernel/selinux/rules.c"
-if [ -f "$RULES_FILE" ] && grep -q 'apply_kernelsu_rules' "$RULES_FILE"; then
+if [ -f "$RULES_FILE" ] && grep -q 'ksu_set_original_types' "$RULES_FILE"; then
   if grep -q 'KSU_SIDECHAN_A_PUBLISH' "$RULES_FILE"; then
     echo "rules.c 已含信号 A 修复，跳过"
   else
@@ -225,7 +225,7 @@ import sys
 path = sys.argv[1]
 text = open(path, encoding="utf-8", errors="surrogateescape").read()
 
-ASSIGN = "    rcu_assign_pointer(selinux_state.policy, pol);\n"
+ASSIGN = "rcu_assign_pointer(selinux_state.policy, pol);"
 
 COMMENT = (
     "    /*\n"
@@ -250,54 +250,44 @@ PAT_UPDATE = re.compile(
 )
 
 
-def region_of(src, start_marker):
-    i = src.find(start_marker)
-    if i < 0:
-        return None
-    j = src.find("\n}\n", i)
-    if j < 0:
-        return None
-    return i, j + 3
-
-
-def patch(src, func_start, pattern):
-    r = region_of(src, func_start)
-    if not r:
-        return None, "找不到函数 %s" % func_start
-    i, j = r
-    region = src[i:j]
-    m = pattern.search(region)
+def relocate(src, pattern):
+    """把调用块挪到它之后最近的 rcu_assign_pointer 之后；不依赖函数名/签名。"""
+    m = pattern.search(src)
     if not m:
-        return None, "%s 中找不到 original-types 发布调用" % func_start
+        return src, "未找到 original-types 发布调用"
     call = m.group(0)
-    region = region.replace(call, "", 1)
-    if ASSIGN not in region:
-        return None, "%s 中找不到 rcu_assign_pointer 锚点" % func_start
-    region = region.replace(ASSIGN, ASSIGN + COMMENT + call, 1)
-    return src[:i] + region + src[j:], None
+    rest = src[m.end():]
+    a = rest.find(ASSIGN)
+    if a < 0:
+        return src, "调用之后没有 rcu_assign_pointer 锚点"
+    eol = rest.find("\n", a)
+    if eol < 0:
+        return src, "rcu_assign_pointer 行不完整"
+    eol += 1
+    new_rest = rest[:eol] + COMMENT + call + rest[eol:]
+    return src[:m.start()] + new_rest, None
 
 
-text, err = patch(text, "apply_kernelsu_rules(", PAT_INITIAL)
+text, err = relocate(text, PAT_INITIAL)
 if err:
     print("  SKIP: " + err)
     sys.exit(0)
-text, err = patch(text, "handle_sepolicy(", PAT_UPDATE)
+text, err = relocate(text, PAT_UPDATE)
 if err:
     print("  SKIP: " + err)
     sys.exit(0)
 
-# newline="" 避免 Windows 上把 LF 改写成 CRLF（CI 在 Linux 上无差异）
 open(path, "w", encoding="utf-8", errors="surrogateescape", newline="").write(text)
 print("  rules.c: original-types 元数据已改为随策略指针发布")
 PYEOF
     if grep -q 'KSU_SIDECHAN_A_PUBLISH' "$RULES_FILE"; then
       echo "信号 A 已修复：策略发布窗口内不再出现旧策略/新代际的 -EAGAIN 回退解析"
     else
-      echo "::warning title=信号 A 顺序补丁跳过::rules.c 结构与上游不同（$KSU_DIR），已跳过，不影响构建"
+      echo "::warning title=信号 A 顺序补丁跳过::rules.c 结构与预期不同（$KSU_DIR）"
     fi
   fi
 else
-  echo "rules.c 不存在或无 apply_kernelsu_rules，跳过信号 A 补丁"
+  echo "rules.c 缺少 ksu_set_original_types，跳过信号 A 补丁"
 fi
 
 # ---------------------------------------------------------------------------
