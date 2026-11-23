@@ -8,7 +8,7 @@ w() { tr -dc "a-z" </dev/urandom | head -c6; }
 W1=$(w); W2=$(w); W3=$(w)
 
 PKG="com.${W1}.${W2}.${W3}"
-NAME="Suki${W1^} ${W2^}"
+NAME="牢大爱肘击"
 KS="$GITHUB_WORKSPACE/manager-spoof.jks"
 KSPASS=$(tr -dc "A-Za-z0-9" </dev/urandom | head -c16)
 

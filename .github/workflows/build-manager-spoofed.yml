@@ -35,6 +35,9 @@ jobs:
       - name: 生成随机包名与签名密钥
         run: bash scripts/manager_spoof/gen.sh
 
+      - name: 应用「牢大爱肘击」图标与背景
+        run: bash scripts/manager_spoof/theme.sh sukisu/manager
+
       - name: 构建 spoofed 管理器
         working-directory: sukisu/manager
         run: |
