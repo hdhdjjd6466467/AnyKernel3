@@ -1,4 +1,4 @@
-name: 内核构建 - 3938 时序方案 (Android 17 / 6.12)
+name: 内核构建 - 时序等时化 (Android 17 / 6.12)
 
 permissions:
   contents: write
@@ -224,8 +224,8 @@ jobs:
       use_nomount: ${{ inputs.use_nomount || false }}
       cve_2026_43499_patch: ${{ inputs.cve_2026_43499_patch }}
       supp_op: ${{ inputs.supp_op || false }}
-      sidechan_abc: false
-      sidechan_3938: true
+      sidechan_abc: true
+      sidechan_3938: false
       enable_susfs: ${{ inputs.ksu_mode != '禁用SUSFS' && inputs.ksu_mode != '禁用KSU' }}
       ksu_mode: ${{ inputs.ksu_mode }}
       droidspaces: ${{ inputs.droidspaces || 'off' }}

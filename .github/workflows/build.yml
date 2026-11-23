@@ -121,6 +121,11 @@ on:
         required: false
         type: boolean
         default: false
+      sidechan_equalize:
+        description: "KSU 类型在类型阶段按未知类型处理，消除 KSU/非法 context 的时序差（默认开）"
+        required: false
+        type: boolean
+        default: true
       droidspaces:
         required: false
         type: string
@@ -781,6 +786,12 @@ jobs:
         if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU' && inputs.sidechan_abc
         working-directory: ${{ env.KERNEL_ROOT }}
         run: bash "$GITHUB_WORKSPACE/scripts/sidechan_hide/apply.sh" KernelSU
+
+      # 时序等时化：KSU 类型直接按未知类型返回，避免回退重解析（对应 Duck Detector 的 KSU context timing anomaly）
+      - name: 应用时序等时化补丁（KSU 类型 / 未知类型同路径）
+        if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU' && inputs.sidechan_equalize
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: bash "$GITHUB_WORKSPACE/scripts/sidechan_equalize/apply.sh" KernelSU
 
       # 单独试验 tiann/KernelSU PR #3938 的时序方案（与 A/B/C 互斥；测试时 sidechan_abc=false）
       - name: 应用 PR #3938 时序方案（可选）
