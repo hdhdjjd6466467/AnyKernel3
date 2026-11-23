@@ -762,6 +762,14 @@ jobs:
         working-directory: ${{ env.KERNEL_ROOT }}
         run: bash "$GITHUB_WORKSPACE/scripts/sidechan_hide/apply.sh" KernelSU
 
+      # attr/current 读取侧伪装：SELinux 隐藏只做了写入方向，读取方向仍会交出真实
+      # u:r:su:s0 / u:r:ksu:s0。这里在 selinux_getprocattr 上补对偶处理，非授权 uid
+      # 读到的可疑标签一律换成 untrusted_app；不改 sucompat，su 命令照常可用。
+      - name: 应用 attr/current 读取侧伪装
+        if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU'
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: bash "$GITHUB_WORKSPACE/scripts/attr_spoof/apply.sh" KernelSU
+
       - name: 克隆 Droidspaces 补丁仓库
         if: inputs.droidspaces != 'off'
         run: |
