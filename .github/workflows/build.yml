@@ -111,6 +111,16 @@ on:
         required: false
         type: string
         default: ""
+      sidechan_abc:
+        description: "应用 A/B/C 侧信道补丁（默认开；与 3938 方案互斥测试时关掉）"
+        required: false
+        type: boolean
+        default: true
+      sidechan_3938:
+        description: "应用 PR #3938 方案（先 backup 再 live + 栈缓冲），单独测试用"
+        required: false
+        type: boolean
+        default: false
       droidspaces:
         required: false
         type: string
@@ -768,9 +778,15 @@ jobs:
       # 补丁之后执行，使其作用于最终形态的 KSU 源码，避免与前序 unified-diff 冲突。
       # 以内容检测守卫、幂等；A 只调整 original-types 元数据的发布顺序（不改策略内容）。
       - name: 应用隐藏层计时侧信道加固补丁 (信号 A/B/C)
-        if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU'
+        if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU' && inputs.sidechan_abc
         working-directory: ${{ env.KERNEL_ROOT }}
         run: bash "$GITHUB_WORKSPACE/scripts/sidechan_hide/apply.sh" KernelSU
+
+      # 单独试验 tiann/KernelSU PR #3938 的时序方案（与 A/B/C 互斥；测试时 sidechan_abc=false）
+      - name: 应用 PR #3938 时序方案（可选）
+        if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU' && inputs.sidechan_3938
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: bash "$GITHUB_WORKSPACE/scripts/sidechan_3938/apply.sh" KernelSU
 
       # /sys/fs/selinux/access 回复里的 avd.seqno 归一化：报告里 SELinux 卡片唯一的 DANGER
       # 判据就是 Non-initial avdSeqNo（开机写布尔值推进的代际）。只改回复字段，不改判定。
