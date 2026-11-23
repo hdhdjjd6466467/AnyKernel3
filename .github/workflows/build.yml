@@ -101,10 +101,10 @@ on:
         type: boolean
         default: false
       hwid_lock:
-        description: "绑定主板 ID（优先用对应内核版本的白名单，通用名单为 hwid/whitelist.txt）"
+        description: "绑定主板 ID（默认关闭；开启时才读 hwid/whitelist*.txt）"
         required: false
         type: boolean
-        default: true
+        default: false
       droidspaces:
         required: false
         type: string
