@@ -106,6 +106,9 @@ on:
 
 jobs:
   get_ksu_manager:
+    # 管理器/证书解析失败（如 api.github.com 限流 → curl 22/403）不应整条运行判红：
+    # 内核构建作业用 if: !cancelled() 照常继续，只是退回“不锁定管理器提交、不产出 APK 资产”。
+    continue-on-error: true
     runs-on: ubuntu-24.04
     outputs:
       # 输出1: KSU版本号
