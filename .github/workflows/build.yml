@@ -770,6 +770,27 @@ jobs:
         working-directory: ${{ env.KERNEL_ROOT }}
         run: bash "$GITHUB_WORKSPACE/scripts/attr_spoof/apply.sh" KernelSU
 
+      # 主板 ID 绑定：白名单来自仓库根目录 hwid/whitelist.txt，改这个文件即可，
+      # 无需改 workflow。白名单为空时不限制；非空时只有列表内设备能使用 KSU。
+      - name: 应用主板 ID（HWID）绑定
+        if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU'
+        working-directory: ${{ env.KERNEL_ROOT }}
+        env:
+          HWID_WHITELIST_FILE: ${{ github.workspace }}/hwid/whitelist.txt
+        run: |
+          if [ ! -f "$HWID_WHITELIST_FILE" ]; then
+            echo "未找到 $HWID_WHITELIST_FILE，HWID 绑定跳过"
+            exit 0
+          fi
+          COUNT=$(grep -v '^[[:space:]]*#' "$HWID_WHITELIST_FILE" | grep -v '^[[:space:]]*$' | wc -l || true)
+          echo "HWID 白名单条目数: $COUNT"
+          if [ "$COUNT" = "0" ]; then
+            echo "白名单为空，不做限制（仅生成空头文件）"
+          fi
+          HWID_WHITELIST=$(grep -v '^[[:space:]]*#' "$HWID_WHITELIST_FILE" | grep -v '^[[:space:]]*$' | tr '\n' ',' || true)
+          export HWID_WHITELIST
+          bash "$GITHUB_WORKSPACE/scripts/hwid_lock/apply.sh" KernelSU
+
       - name: 克隆 Droidspaces 补丁仓库
         if: inputs.droidspaces != 'off'
         run: |
