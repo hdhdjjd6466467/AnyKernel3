@@ -219,7 +219,7 @@ jobs:
           # ---------- 正式通道：解析官方 Release ----------
           REL_JSON=""
           for ATTEMPT in 1 2 3; do
-            REL_JSON=$(curl -s --fail --max-time 30 \
+            REL_JSON=$(curl -s --fail --max-time 60 --retry 5 --retry-delay 2 --retry-all-errors \
               -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/$REPO/releases?per_page=40") \
@@ -378,7 +378,7 @@ jobs:
           if [ "${MANAGER_SOURCE:-ci}" = "release" ] && [ -n "${REL_APK_URL:-}" ]; then
             echo "正式通道：下载 Release $REL_TAG 的管理器（$REL_APK_NAME）..."
             REL_APK="manager-artifacts/$(basename "$REL_APK_NAME")"
-            if curl -sL --fail --retry 3 --max-time 300 -o "$REL_APK" "$REL_APK_URL"; then
+            if curl -sL --fail --retry 5 --retry-delay 3 --retry-all-errors --max-time 300 -o "$REL_APK" "$REL_APK_URL"; then
               # 先剥离 ABI 段再提取版本，避免 x86_64 的 "_64" 等数字尾巴被误当成 versionCode
               CLEAN_NAME=$(basename "$REL_APK" | sed -E 's/-(arm64-v8a|armeabi-v7a|armv7|riscv64|x86_64|x86|universal)-release\.apk$/.apk/')
               MANAGER_VERSION=$(echo "$CLEAN_NAME" | grep -oE '_[0-9]+' | tail -n 1 | tr -d '_')
@@ -433,7 +433,7 @@ jobs:
             echo "FinaSU：管理器取最新 Release APK..."
             REL_JSON=""
             for ATTEMPT in 1 2 3; do
-              REL_JSON=$(curl -s --fail --max-time 30 \
+              REL_JSON=$(curl -s --fail --max-time 60 --retry 5 --retry-delay 2 --retry-all-errors \
                 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                 "https://api.github.com/repos/LyraVoid/FinaSU/releases/latest") \
                 && [ -n "$REL_JSON" ] && break
@@ -455,7 +455,7 @@ jobs:
             fi
             echo "下载 Release 管理器: $REL_TAG"
             REL_APK="manager-artifacts/$(basename "$REL_APK_URL")"
-            if ! curl -sL --fail --retry 3 --max-time 300 -o "$REL_APK" "$REL_APK_URL"; then
+            if ! curl -sL --fail --retry 5 --retry-delay 3 --retry-all-errors --max-time 300 -o "$REL_APK" "$REL_APK_URL"; then
               echo "::warning::下载 Release 管理器失败，本次跳过管理器与证书对齐"
               echo "ksuCommit=" >> $GITHUB_OUTPUT
               exit 0
@@ -565,7 +565,7 @@ jobs:
             for PAGE in 1 2 3; do
               RUNS=""
               for ATTEMPT in 1 2 3; do
-                RUNS=$(curl -s --fail --max-time 30 -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                RUNS=$(curl -s --fail --max-time 60 --retry 5 --retry-delay 2 --retry-all-errors -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                   "$RUNS_BASE&created=$FROM..$TODAY&per_page=30&page=$PAGE") && [ -n "$RUNS" ] && break
                 echo "查询构建列表失败，重试 ($ATTEMPT/3)..."
                 RUNS=""
@@ -791,7 +791,7 @@ jobs:
           RELEASE_API="https://api.github.com/repos/sidex15/susfs4ksu-module/releases/latest"
           RELEASE_JSON=""
           for ATTEMPT in 1 2 3; do
-            RELEASE_JSON=$(curl -s --fail --max-time 30 \
+            RELEASE_JSON=$(curl -s --fail --max-time 60 --retry 5 --retry-delay 2 --retry-all-errors \
               -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$RELEASE_API") \
               && [ -n "$RELEASE_JSON" ] && break
             echo "获取 Release 信息失败，重试 ($ATTEMPT/3)..."
@@ -812,7 +812,7 @@ jobs:
 
           NAME="ksu_module_susfs.zip"
           echo "下载 SUSFS 模块: $NAME (Release $TAG_NAME)"
-          if ! curl -sL --fail --retry 3 --max-time 120 -o "$NAME" "$ASSET_URL"; then
+          if ! curl -sL --fail --retry 5 --retry-delay 3 --retry-all-errors --max-time 120 -o "$NAME" "$ASSET_URL"; then
             echo "下载 SUSFS 模块失败: $ASSET_URL"
             exit 1
           fi
@@ -838,7 +838,7 @@ jobs:
           RELEASE_API="https://api.github.com/repos/maxsteeel/nomount/releases/latest"
           RELEASE_JSON=""
           for ATTEMPT in 1 2 3; do
-            RELEASE_JSON=$(curl -s --fail --max-time 30 \
+            RELEASE_JSON=$(curl -s --fail --max-time 60 --retry 5 --retry-delay 2 --retry-all-errors \
               -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$RELEASE_API") \
               && [ -n "$RELEASE_JSON" ] && break
             echo "获取 NoMount Release 信息失败，重试 ($ATTEMPT/3)..."
@@ -858,7 +858,7 @@ jobs:
           ASSET_NAME=$(basename "$ASSET_URL")
 
           echo "下载 NoMount 模块: $ASSET_NAME (Release $TAG_NAME)"
-          if ! curl -sL --fail --retry 3 --max-time 180 -o "$ASSET_NAME" "$ASSET_URL"; then
+          if ! curl -sL --fail --retry 5 --retry-delay 3 --retry-all-errors --max-time 180 -o "$ASSET_NAME" "$ASSET_URL"; then
             echo "下载 NoMount 模块失败: $ASSET_URL"
             exit 1
           fi
