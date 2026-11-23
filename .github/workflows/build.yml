@@ -105,6 +105,11 @@ on:
         required: false
         type: boolean
         default: false
+      hwid_lock:
+        description: "绑定主板 ID（白名单见 hwid/whitelist.txt；关闭则不限设备）"
+        required: false
+        type: boolean
+        default: true
       droidspaces:
         required: false
         type: string
@@ -773,7 +778,7 @@ jobs:
       # 主板 ID 绑定：白名单来自仓库根目录 hwid/whitelist.txt，改这个文件即可，
       # 无需改 workflow。白名单为空时不限制；非空时只有列表内设备能使用 KSU。
       - name: 应用主板 ID（HWID）绑定
-        if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU'
+        if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU' && inputs.hwid_lock
         working-directory: ${{ env.KERNEL_ROOT }}
         env:
           HWID_WHITELIST_FILE: ${{ github.workspace }}/hwid/whitelist.txt

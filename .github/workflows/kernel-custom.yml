@@ -393,6 +393,12 @@ on:
         required: false
         type: boolean
         default: false
+      hwid_lock:
+        description: "绑定主板 ID（白名单见 hwid/whitelist.txt；取消勾选则不限设备）"
+        required: false
+        type: boolean
+        default: true
+        default: false
       skip_incompatible:
         description: "功能不兼容或无法使用时自动跳过该功能（不中断构建）"
         required: false
@@ -577,6 +583,7 @@ jobs:
       use_nomount: ${{ inputs.use_nomount || false }}
       cve_2026_43499_patch: ${{ inputs.cve_2026_43499_patch }}
       supp_op: ${{ inputs.supp_op || false }}
+      hwid_lock: ${{ inputs.hwid_lock }}
       enable_susfs: ${{ inputs.ksu_mode != '禁用SUSFS' && inputs.ksu_mode != '禁用KSU' }}
       ksu_mode: ${{ inputs.ksu_mode }}
       droidspaces: ${{ startsWith(inputs.droidspaces, '678') && '678' || startsWith(inputs.droidspaces, '123') && '123' || startsWith(inputs.droidspaces, '345') && '345' || 'off' }}
