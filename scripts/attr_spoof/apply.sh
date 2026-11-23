@@ -41,7 +41,7 @@ if grep -q 'KSU_ATTR_SPOOF' "$HIDE_FILE"; then
 fi
 
 echo "应用 attr/current 读取侧伪装..."
-python3 - "$HIDE_FILE" <<'PYEOF'
+if ! python3 - "$HIDE_FILE" <<'PYEOF'
 import sys
 
 path = sys.argv[1]
@@ -134,6 +134,13 @@ rep(ANCHOR_UNREG, ANCHOR_UNREG + "    ksu_lsm_unhook(&selinux_getprocattr_hook);
 open(path, "w", encoding="utf-8", errors="surrogateescape").write(text)
 print("attr/current 伪装已注入")
 PYEOF
+then
+  echo "--- 诊断 ---"
+  echo "ksu_lsm_hook 出现次数: $(grep -c 'ksu_lsm_hook' "$HIDE_FILE" || true)"
+  grep -n 'my_setprocattr' "$HIDE_FILE" | head -3 || true
+  grep -n 'KSU_LSM_HOOK_INIT' "$HIDE_FILE" | head -3 || true
+  fail "attr/current 伪装补丁应用失败：当前 KSU 分支没有 ksu_lsm_hook 框架（SukiSU-Nova builtin 分支的 SELinux 钩子由内核侧 SUSFS 补丁内联调用，不走 LSM hook）"
+fi
 
 grep -q 'KSU_ATTR_SPOOF' "$HIDE_FILE" || fail "attr/current 伪装注入后校验失败"
 grep -q 'selinux_getprocattr_hook' "$HIDE_FILE" || fail "attr/current 伪装缺少 hook 注册"
