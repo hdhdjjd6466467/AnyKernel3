@@ -19,13 +19,15 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: 安装 SDK 37 平台与 build-tools
+      - name: 准备 Android SDK（用 runner 预装的 sdkmanager）
         run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platforms;android-37" "build-tools;37.0.0" >/dev/null
+          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          SM="$(find "$SDK/cmdline-tools" -maxdepth 3 -name sdkmanager -type f | head -n1)"
+          echo "sdkmanager: $SM"
+          yes | "$SM" --licenses >/dev/null 2>&1 || true
+          "$SM" --channel=3 "platforms;android-37" "build-tools;37.0.0" "platform-tools" >/dev/null ||           "$SM" "platforms;android-37" "build-tools;37.0.0" "platform-tools" >/dev/null
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
       - name: 克隆 SukiSU 管理器源码
         run: |
@@ -42,6 +44,7 @@ jobs:
         working-directory: sukisu/manager
         run: |
           chmod +x gradlew
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
           ./gradlew --no-daemon clean assembleRelease \
             -PKSU_PACKAGE_NAME="$SPOOF_PKG" \
             -PKSU_NAME="$SPOOF_NAME" \
