@@ -791,12 +791,16 @@ jobs:
       - name: 应用时序等时化补丁（KSU 类型 / 未知类型同路径）
         if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU' && inputs.sidechan_equalize
         working-directory: ${{ env.KERNEL_ROOT }}
+        env:
+          SKIP_INCOMPATIBLE: "false"   # 打不上就失败，不允许静默跳过
         run: bash "$GITHUB_WORKSPACE/scripts/sidechan_equalize/apply.sh" KernelSU
 
       # 单独试验 tiann/KernelSU PR #3938 的时序方案（与 A/B/C 互斥；测试时 sidechan_abc=false）
       - name: 应用 PR #3938 时序方案（可选）
         if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU' && inputs.sidechan_3938
         working-directory: ${{ env.KERNEL_ROOT }}
+        env:
+          SKIP_INCOMPATIBLE: "false"   # 打不上就失败，不允许静默跳过
         run: bash "$GITHUB_WORKSPACE/scripts/sidechan_3938/stackbuf.sh" KernelSU
 
       # /sys/fs/selinux/access 回复里的 avd.seqno 归一化：报告里 SELinux 卡片唯一的 DANGER
