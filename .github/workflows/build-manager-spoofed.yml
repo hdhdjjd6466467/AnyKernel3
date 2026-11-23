@@ -1,4 +1,4 @@
-name: 构建管理器（Spoofed）
+name: 构建管理器（牢大爱肘击 / KernelSU-Next）
 
 on:
   workflow_dispatch:
@@ -25,41 +25,63 @@ jobs:
           SM="$(find "$SDK/cmdline-tools" -maxdepth 3 -name sdkmanager -type f | head -n1)"
           echo "sdkmanager: $SM"
           yes | "$SM" --licenses >/dev/null 2>&1 || true
-          "$SM" --channel=3 "platforms;android-37" "build-tools;37.0.0" "platform-tools" >/dev/null ||           "$SM" "platforms;android-37" "build-tools;37.0.0" "platform-tools" >/dev/null
+          "$SM" --channel=3 "platforms;android-37" "build-tools;37.0.0" "platform-tools" >/dev/null || \
+          "$SM" "platforms;android-37" "build-tools;37.0.0" "platform-tools" >/dev/null
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
-      - name: 克隆 SukiSU 管理器源码
+      - name: 克隆 KernelSU-Next（含 spoof 脚本）
         run: |
-          git clone --depth 1 -b main https://git.zako.shirkneko.top:20004/shirkneko/SukiSU.git sukisu
-          test -d sukisu/manager
+          git clone --depth 1 -b dev https://github.com/KernelSU-Next/KernelSU-Next.git ksunext
+          test -d ksunext/manager
+          test -f ksunext/manager/spoof
 
-      - name: 生成随机包名与签名密钥
-        run: bash scripts/manager_spoof/gen.sh
+      - name: 随机包名（KernelSU-Next 原生 spoof）
+        working-directory: ksunext/manager
+        run: |
+          chmod +x spoof
+          ./spoof
 
-      - name: 应用「牢大爱肘击」图标与背景
-        run: bash scripts/manager_spoof/theme.sh sukisu/manager
+      - name: 换成牢大爱肘击（名称 / 图标 / 背景）
+        run: bash scripts/manager_spoof/theme_next.sh ksunext/manager
 
-      - name: 构建 spoofed 管理器
-        working-directory: sukisu/manager
+      - name: 放入 ksud 二进制
+        run: |
+          mkdir -p ksunext/manager/app/src/main/jniLibs/arm64-v8a ksunext/manager/app/src/main/jniLibs/x86_64
+          curl -fsSL -o ksunext/manager/app/src/main/jniLibs/arm64-v8a/libksud.so \
+            https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/ksud-aarch64-linux-android
+          curl -fsSL -o ksunext/manager/app/src/main/jniLibs/x86_64/libksud.so \
+            https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/ksud-x86_64-linux-android
+          ls -l ksunext/manager/app/src/main/jniLibs/arm64-v8a
+
+      - name: 生成签名密钥
+        run: |
+          KS="$GITHUB_WORKSPACE/manager-spoof.jks"
+          KSPASS=$(tr -dc "A-Za-z0-9" </dev/urandom | head -c16)
+          keytool -genkeypair -keystore "$KS" -storepass "$KSPASS" -keypass "$KSPASS" \
+            -alias spoof -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Suki, OU=Spoof, O=Spoof, L=Spoof, S=Spoof, C=CN"
+          {
+            echo "KEYSTORE_FILE=$KS"
+            echo "KEYSTORE_PASSWORD=$KSPASS"
+            echo "KEY_ALIAS=spoof"
+            echo "KEY_PASSWORD=$KSPASS"
+          } >> ksunext/manager/gradle.properties
+          echo "KEYSTORE_FILE=$KS" >> "$GITHUB_ENV"
+
+      - name: 构建
+        working-directory: ksunext/manager
         run: |
           chmod +x gradlew
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
-          ./gradlew --no-daemon clean assembleRelease \
-            -PKSU_PACKAGE_NAME="$SPOOF_PKG" \
-            -PKSU_NAME="$SPOOF_NAME" \
-            -PKEYSTORE_FILE="$KEYSTORE_FILE" \
-            -PKEYSTORE_PASSWORD="$KEYSTORE_PASSWORD" \
-            -PKEY_ALIAS="$KEY_ALIAS" \
-            -PKEY_PASSWORD="$KEY_PASSWORD"
+          ./gradlew --no-daemon clean assembleRelease
 
       - name: 收集 APK
         run: |
           mkdir -p out
-          find sukisu/manager -name "*.apk" -path "*release*" -exec cp {} out/ \;
+          find ksunext/manager/app/build/outputs/apk/release -name "*.apk" -exec cp {} out/ \;
           ls -l out
-          for f in out/*.apk; do mv "$f" "${f%.apk}-spoofed.apk"; done
-          ls -l out
+          cd out && for f in *.apk; do mv "$f" "${f%.apk}-spoofed.apk"; done && ls -l
 
       - name: 上传 APK
         uses: actions/upload-artifact@v7
