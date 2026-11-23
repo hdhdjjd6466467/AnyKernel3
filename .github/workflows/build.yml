@@ -101,7 +101,7 @@ on:
         type: boolean
         default: false
       hwid_lock:
-        description: "绑定主板 ID（白名单见 hwid/whitelist.txt；关闭则不限设备）"
+        description: "绑定主板 ID（优先用对应内核版本的白名单，通用名单为 hwid/whitelist.txt）"
         required: false
         type: boolean
         default: true
@@ -754,10 +754,10 @@ jobs:
           SUB_LEVEL: ${{ inputs.sub_level }}
         run: bash "$GITHUB_WORKSPACE/scripts/susfs_fixes/apply.sh"
           
-      # 隐藏层「计时侧信道」加固（信号 B/C）：须在 SukiSU-Nova 兼容补丁与 SUSFS
+      # 隐藏层「计时侧信道」加固（信号 A/B/C）：须在 SukiSU-Nova 兼容补丁与 SUSFS
       # 补丁之后执行，使其作用于最终形态的 KSU 源码，避免与前序 unified-diff 冲突。
-      # 以内容检测守卫、幂等；A（策略发布竞态）仅提示不改，详见脚本内注释。
-      - name: 应用隐藏层计时侧信道加固补丁 (信号 B/C)
+      # 以内容检测守卫、幂等；A 只调整 original-types 元数据的发布顺序（不改策略内容）。
+      - name: 应用隐藏层计时侧信道加固补丁 (信号 A/B/C)
         if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU'
         working-directory: ${{ env.KERNEL_ROOT }}
         run: bash "$GITHUB_WORKSPACE/scripts/sidechan_hide/apply.sh" KernelSU
@@ -770,14 +770,17 @@ jobs:
         working-directory: ${{ env.KERNEL_ROOT }}
         run: bash "$GITHUB_WORKSPACE/scripts/attr_spoof/apply.sh" KernelSU
 
-      # 主板 ID 绑定：白名单来自仓库根目录 hwid/whitelist.txt，改这个文件即可，
-      # 无需改 workflow。白名单为空时不限制；非空时只有列表内设备能使用 KSU。
+      # 优先使用当前内核版本的白名单，其他版本使用通用名单。
       - name: 应用主板 ID（HWID）绑定
         if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU' && inputs.hwid_lock
         working-directory: ${{ env.KERNEL_ROOT }}
         env:
           HWID_WHITELIST_FILE: ${{ github.workspace }}/hwid/whitelist.txt
+          HWID_VERSION_WHITELIST_FILE: ${{ github.workspace }}/hwid/whitelist-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}.txt
         run: |
+          if [ -f "$HWID_VERSION_WHITELIST_FILE" ]; then
+            HWID_WHITELIST_FILE="$HWID_VERSION_WHITELIST_FILE"
+          fi
           if [ ! -f "$HWID_WHITELIST_FILE" ]; then
             echo "未找到 $HWID_WHITELIST_FILE，HWID 绑定跳过"
             exit 0

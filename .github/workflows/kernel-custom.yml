@@ -391,7 +391,7 @@ on:
         type: boolean
         default: false
       hwid_lock:
-        description: "绑定主板 ID（白名单见 hwid/whitelist.txt；取消勾选则不限设备）"
+        description: "绑定主板 ID（优先用对应内核版本的白名单，通用名单为 hwid/whitelist.txt）"
         required: false
         type: boolean
         default: true

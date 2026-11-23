@@ -1,4 +1,4 @@
-# 隐藏层「计时侧信道」加固（signal B/C/D）
+# 隐藏层「计时侧信道」加固（signal A/B/C/D）
 
 针对一份 KernelSU/SukiSU 隐藏机制侧信道检测报告的内核侧修复。隐藏层改写了
 SELinux 查询 / syscall 的**返回值**，却没有抹平产生这些返回值所花的**时间**；
@@ -12,12 +12,38 @@ SELinux 查询 / syscall 的**返回值**，却没有抹平产生这些返回值
 
 | 信号 | 位置 | 机理 | 本补丁 |
 |---|---|---|---|
-| **A** 策略发布竞态 | `kernel/selinux/rules.c`、`kernel/selinux/sepolicy.c` | `apply_kernelsu_rules()` 发布新策略时 `latest_granting` 代际推进，live 与 backup 在一个窗口内不一致 → `security_context_to_sid_live()` 返回 `-EAGAIN` → 回退 backup 重解析。重载窗口内出现干净内核没有的瞬态尾延迟/重试。 | **不改**（仅 `::notice` 提示）。见下文。 |
+| **A** 策略发布竞态 | `kernel/selinux/rules.c`、`kernel/selinux/sepolicy.c` | `apply_kernelsu_rules()` 在 `rcu_assign_pointer()` **之前**就把 `ksu_original_types_*` 切到新代际；整个规则构建窗口内读者是「旧 live 策略 + 新代际元数据」，`ksu_type_is_original()` 返回 -1 → `backup_string_to_context_struct()` 判 `-EAGAIN` → 多走一次回退解析。 | **已修**：元数据发布挪到 `rcu_assign_pointer()` 之后，窗口从「构建规则全程」收敛到两条写指令。见下文。 |
 | **B** 无效上下文冗余解析 | `kernel/feature/selinux_hide.c` `string_to_context_struct()` | live 策略的 MLS 解析失败后，仍对 backup(orig) 策略多跑一次 `mls_context_to_sid()` + MLS 后缀 `memcpy`，其结果在 `out:` 处被丢弃。喂畸形 context，被 hook 的内核比干净内核拒绝得更慢。 | **已修**：`if (orig_valid)` → `if (orig_valid && !rc)`。 |
 | **C** syscall dispatcher 固定开销 | `kernel/hook/syscall_hook_manager.c` `ksu_sys_enter_handler()` + `kernel/feature/sucompat.c` | `newfstatat`/`faccessat` 高频 syscall 对**所有**进程都被重定向进 KSU dispatcher，再在 sucompat 处理函数里按 allow-uid 提前返回。普通 App 每次都多付一段固定的 dispatcher 往返开销，最适合被动、纯无特权检测。 | **已修**：把 allow-uid 判定上提到 tracepoint，非授权进程走原生快路径。 |
 | **D** `attr/current` 换行前缀 vs 非法类型 | `kernel/feature/selinux_hide.c` `my_setprocattr()` | 成对写 `/proc/self/attr/current`：A=非法类型，B=换行前缀，两者都返回 `-EINVAL`。B 在 stock 上走 `prepare_creds()/abort_creds()`，A 在解析内部 early-return，差值 700~800 ns。 | **不改**：上游 PR #3981 已把该路径对齐 stock（保留短路 + 单次解析），main 已含该修复。详见下文。 |
 
 ## 已应用的改动
+
+### 信号 A — `kernel/selinux/rules.c`
+
+两处发布点（`apply_kernelsu_rules()` 与 `handle_sepolicy()`）都把 original-types 元数据
+从 `rcu_assign_pointer()` 之前移到之后：
+
+```c
+    pol->latest_granting = old_pol->latest_granting + 1;
+-   if (!ksu_set_original_types(db, &old_pol->policydb, pol->latest_granting))
+-       pr_warn("failed to save original type metadata, use backup lookups\n");
+    ...
+    rcu_assign_pointer(selinux_state.policy, pol);
++   /* KSU_SIDECHAN_A_PUBLISH */
++   if (!ksu_set_original_types(db, &old_pol->policydb, pol->latest_granting))
++       pr_warn("failed to save original type metadata, use backup lookups\n");
+    synchronize_rcu();
+```
+
+为什么这样就够了：
+
+- 发布前读者拿到旧 live 策略，元数据也仍指向旧 db/旧代际 → `ksu_type_is_original()` 正常返回 1/0。
+- 发布后读者拿到新策略，元数据随指针一起切到新 db/新代际 → 仍然 1/0。
+- 残留窗口只剩 `rcu_assign_pointer()` 与两次 `WRITE_ONCE` 之间；命中时按既有 `-EAGAIN`
+  路径重试一次，与 stock `sidtab_freeze`/`-ESTALE` 重试同构，不再是「毫秒级持续重试」。
+- 策略内容、SID 分配、`ksu_type_is_original()` 的 `-1/0/1` 语义、隐藏正确性都不变；
+  `old_pol` 在 `synchronize_rcu()` 之前仍然有效，元数据读取 `orig_db->p_types.nprim` 安全。
 
 ### 信号 C — `kernel/hook/syscall_hook_manager.c`
 
@@ -101,19 +127,25 @@ if (orig_valid && !rc) { /* KSU_SIDECHAN_B_GUARD */   // 原: if (orig_valid) {
 A/B 拉平的改动都必然在绝对延迟上与 stock 分叉。判定侧才是正确落点：用同版本 stock
 基线的 `z = (A−B − baseline_med) / baseline_iqr`，或换同构探针对。
 
-## 为什么不自动修信号 A
+## 信号 A 的边界与上游对照
 
-A 的根因是 `apply_kernelsu_rules()` 在 `selinux_state.policy_mutex` 下换策略 + 刷新
-backup 时存在一个 live/backup 代际不一致的窗口。要彻底消除需要把「策略换装 + backup
-重建 + 代际切换」做成对查询原子可见（RCU 发布顺序 / 代际握手重设计）。这属于启动关键、
-SELinux 判定关键路径，**盲改**（无法在本地编译、无法在真机验证的前提下）有开机失败或
-安全标签判定错误的风险。因此本脚本只对 A 发 `::notice` 提示，改动留给真机迭代：
+信号 A 分两层修完：
 
-- 让 backup 刷新与 live 策略换装在同一 `policy_mutex` 临界区内、以单一代际数对外发布；
-- 或在重载窗口内让回退路径与正常路径等时（例如预热 backup sidtab，使 `-EAGAIN` 重解析
-  不额外增加可测延迟）。
+1. **发布顺序**（rules.c）：代际元数据不再领先于策略指针。
+2. **发布原子性**（sepolicy.c）：`limit` 与 `generation` 压进同一个 `u64`
+   （low32=limit，high32=generation）单次发布，`policy` 指针先写。arm64 上对齐 64 位写
+   是单次原子，读者拿到的 `(limit, generation)` 永远同代；与 policy 指针错配只会返回
+   `-1`（走既有重试）。这同时关掉了旧实现里真实存在的**隐藏绕过**：以前可能读到
+   「新 limit + 旧 generation」，一旦代际恰好等于调用方代数，KSU 新增类型会被误判为
+   original 而放行。三个函数的对外签名不变，`selinux_hide.c` 无需改动。
 
-两种方向都需配合报告里的测量方法学（成对测量、分位数、控混淆项）在真机上判别后再定稿。
+仍属「另一种取舍」、没有做的：
+
+- **netlink 可见性**：策略发布仍会向 app 所属的 SELinux netlink socket 广播
+   policy-load。上游 [PR #3965](https://github.com/tiann/KernelSU/pull/3965)（open, WIP）
+   在做「隐藏生效时过滤 app 收件人」，6.1 因缺 `netlink_broadcast_filtered` 仍是未解决项。
+   本仓库不采用该 WIP：它改的是接收路径，牵涉 hook 生命周期与跨版本兼容，且 `selinux_hide`
+   的状态页已经是冻结视图，收益与风险不匹配。
 
 ## 验证（必须在真机上做）
 
@@ -128,7 +160,9 @@ SELinux 判定关键路径，**盲改**（无法在本地编译、无法在真�
 4. **信号 D**：成对写 `/proc/self/attr/current`：A=非法类型、B=换行前缀（等长），各 512 对
    AB/BA 交替、32 次预热。修复后两者都应在解析层返回 `-EINVAL`，方向计数应收敛到
    `3 × (反向 + ties)` 以内，block 分布从 `0/16/0` 变成接近 `8/8/0`。
-5. **信号 A**：在 `load_policy` / 策略重载窗口附近高频探测，确认（或量化残留的）瞬态尾延迟。
+5. **信号 A**：开机后立即（`apply_kernelsu_rules()` 窗口内）与运行期 `ksud sepolicy` 前后，
+   各做一组 `context_to_sid` / `attr/current` 写入的成对计时。修复前窗口内是毫秒级持续
+   的 `-EAGAIN` 重解析；修复后应只剩零星的单次重试，尾延迟分布与 stock 同量级。
 
 > 重要：请保留可恢复路径（fastboot 可刷回的 boot/init_boot 备份）。改动涉及 syscall
 > 热路径与 SELinux 解析路径，务必先在可恢复的设备上验证再日常使用。

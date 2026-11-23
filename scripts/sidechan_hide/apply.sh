@@ -194,8 +194,234 @@ fi
 echo "信号 D 不处理：上游 PR #3981 已把 setprocattr 对齐 stock，本脚本保持原样"
 
 # ---------------------------------------------------------------------------
-# 信号 A：仅提示，不改动（见 README.md）
+# 信号 A：original-types 元数据与 live 策略的代际错位
+#
+# 根因（kernel/selinux/rules.c）：
+#   apply_kernelsu_rules() / handle_sepolicy() 在 rcu_assign_pointer() 之前就调用
+#   ksu_set_original_types() / ksu_advance_original_types()，把 ksu_original_types_*
+#   切到「新 db + 新代际」。而在策略指针发布前，读者拿到的仍是旧 live 策略：
+#     ksu_type_is_original(old_db, new_gen, v) → original_types_policy(new_db) != old_db
+#     → 返回 -1 → backup_string_to_context_struct() 判定 -EAGAIN → 多走一次回退解析。
+#   这个窗口不是几条指令，而是「构建整棵规则」的整个过程（毫秒级），期间任何
+#   无特权进程的 context_to_sid（含 attr/current 写、access 查询）都多付一次解析，
+#   正是报告里 A 信号的瞬态尾延迟来源。
+#
+# 修法（与上游 #3964 同思路：代际只随策略指针一起对外可见）：
+#   把 original-types 元数据发布挪到 rcu_assign_pointer() 之后、synchronize_rcu()
+#   之前。发布前读者用旧策略+旧元数据（一致），发布后新策略+新元数据（一致），
+#   残留窗口只剩两条写指令之间；命中时仍走既有 -EAGAIN 重试，与 stock 的
+#   sidtab_freeze/-ESTALE 重试同构。策略内容、SID 分配、隐藏语义均不变。
 # ---------------------------------------------------------------------------
-echo "::notice title=信号 A 未处理::策略发布竞态（rules.c/sepolicy.c 的 -EAGAIN 重载窗口）需真机配合测量工具迭代，本脚本不盲改，详见 scripts/sidechan_hide/README.md"
+RULES_FILE="$KSU_DIR/kernel/selinux/rules.c"
+if [ -f "$RULES_FILE" ] && grep -q 'apply_kernelsu_rules' "$RULES_FILE"; then
+  if grep -q 'KSU_SIDECHAN_A_PUBLISH' "$RULES_FILE"; then
+    echo "rules.c 已含信号 A 修复，跳过"
+  else
+    echo "应用信号 A 补丁：original-types 元数据改为随策略指针一起发布..."
+    python3 - "$RULES_FILE" <<'PYEOF'
+import re
+import sys
 
-echo "隐藏层计时侧信道加固补丁处理完成（已处理 B/C；D 交由上游 #3981；A 仅提示）"
+path = sys.argv[1]
+text = open(path, encoding="utf-8", errors="surrogateescape").read()
+
+ASSIGN = "    rcu_assign_pointer(selinux_state.policy, pol);\n"
+
+COMMENT = (
+    "    /*\n"
+    "     * 侧信道加固（信号 A）：original-types 元数据必须与 live 策略在同一代际上\n"
+    "     * 发布。原顺序在 rcu_assign_pointer() 之前就切到新代际，构建规则的整个窗口\n"
+    "     * 内读者看到的是「旧 live 策略 + 新代际元数据」，ksu_type_is_original()\n"
+    "     * 返回 -1，backup_string_to_context_struct() 因此返回 -EAGAIN，多走一次\n"
+    "     * 回退解析，形成干净内核没有的瞬态尾延迟。移到 rcu_assign_pointer() 之后，\n"
+    "     * 元数据与 live 策略始终同代际，窗口收敛到两条写指令之间；命中时仍按既有\n"
+    "     * -EAGAIN 路径重试，与 stock 的 sidtab_freeze/-ESTALE 重试同构。\n"
+    "     */\n"
+    "    /* KSU_SIDECHAN_A_PUBLISH */\n"
+)
+
+PAT_INITIAL = re.compile(
+    r"[ \t]*if \(!ksu_set_original_types\([^\n]*\)\)\n"
+    r"[ \t]*pr_warn\([^\n]*\);\n"
+)
+PAT_UPDATE = re.compile(
+    r"[ \t]*if \(!ksu_advance_original_types\([^\n]*\)\)\n"
+    r"[ \t]*pr_warn\([^\n]*\);\n"
+)
+
+
+def region_of(src, start_marker):
+    i = src.find(start_marker)
+    if i < 0:
+        return None
+    j = src.find("\n}\n", i)
+    if j < 0:
+        return None
+    return i, j + 3
+
+
+def patch(src, func_start, pattern):
+    r = region_of(src, func_start)
+    if not r:
+        return None, "找不到函数 %s" % func_start
+    i, j = r
+    region = src[i:j]
+    m = pattern.search(region)
+    if not m:
+        return None, "%s 中找不到 original-types 发布调用" % func_start
+    call = m.group(0)
+    region = region.replace(call, "", 1)
+    if ASSIGN not in region:
+        return None, "%s 中找不到 rcu_assign_pointer 锚点" % func_start
+    region = region.replace(ASSIGN, ASSIGN + COMMENT + call, 1)
+    return src[:i] + region + src[j:], None
+
+
+text, err = patch(text, "void apply_kernelsu_rules()", PAT_INITIAL)
+if err:
+    sys.exit(err)
+text, err = patch(text, "int handle_sepolicy(", PAT_UPDATE)
+if err:
+    sys.exit(err)
+
+# newline="" 避免 Windows 上把 LF 改写成 CRLF（CI 在 Linux 上无差异）
+open(path, "w", encoding="utf-8", errors="surrogateescape", newline="").write(text)
+print("  rules.c: original-types 元数据已改为随策略指针发布")
+PYEOF
+    grep -q 'KSU_SIDECHAN_A_PUBLISH' "$RULES_FILE" \
+      || fail "信号 A 补丁应用后校验失败 (rules.c)"
+    echo "信号 A 已修复：策略发布窗口内不再出现旧策略/新代际的 -EAGAIN 回退解析"
+  fi
+else
+  echo "rules.c 不存在或无 apply_kernelsu_rules，跳过信号 A 补丁"
+fi
+
+# ---------------------------------------------------------------------------
+# 信号 A（续）：original-types 三元组的撕裂读
+#
+# sepolicy.c 里 limit / generation 是两个独立 WRITE_ONCE，policy 指针是第三个。
+# 读者按 (policy, limit, generation) 三次 READ_ONCE 取值，可能拼出
+# 「新 limit + 旧 generation + 旧 policy」：只要 generation 恰好等于读者传入的
+# 代数，ksu_type_is_original() 就会用错误的 limit 把 KSU 新增类型判成 original，
+# 这是真正的隐藏绕过窗口，不只是性能问题（当前上游代码就有）。
+#
+# 修法：limit 与 generation 压进同一个 u64（low32=limit, high32=generation），
+# 单次 WRITE_ONCE 发布；policy 指针先写。arm64 上对齐 64 位写是单次原子，
+# 读者拿到的 (limit, generation) 永远同代，任何与 policy 指针的错配都只会让
+# 代际比较失败返回 -1（走既有重试），不会产生错误的 1/0。
+# 对外签名 ksu_type_is_original()/ksu_set_original_types()/ksu_advance_original_types()
+# 全部不变，selinux_hide.c 不需要改。
+# ---------------------------------------------------------------------------
+SEPOLICY_FILE="$KSU_DIR/kernel/selinux/sepolicy.c"
+if [ -f "$SEPOLICY_FILE" ] && grep -q 'ksu_original_types_' "$SEPOLICY_FILE"; then
+  if grep -q 'ksu_original_types_view' "$SEPOLICY_FILE"; then
+    echo "sepolicy.c 已含信号 A 原子发布，跳过"
+  elif ! grep -q 'ksu_original_types_limit' "$SEPOLICY_FILE"; then
+    echo "sepolicy.c 结构已变化（无三写路径），跳过信号 A 原子发布补丁"
+  else
+    echo "应用信号 A 补丁（续）：original-types 的 limit/generation 合并为单次原子发布..."
+    python3 - "$SEPOLICY_FILE" <<'PYEOF'
+import re
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8", errors="surrogateescape").read()
+
+OLD_DECL = (
+    "static const struct policydb *ksu_original_types_policy;\n"
+    "static u32 ksu_original_types_limit;\n"
+    "static u32 ksu_original_types_generation;\n"
+)
+
+NEW_DECL = (
+    "/*\n"
+    " * 侧信道加固（信号 A）：limit 与 generation 必须同生同灭。\n"
+    " * 旧实现是两个独立 WRITE_ONCE，读者可能拼出「新 limit + 旧 generation」，\n"
+    " * 一旦 generation 与调用方传入的代数相同，就会用错误的 limit 把 KSU 新增\n"
+    " * 类型判成 original —— 真实的隐藏绕过窗口。压进一个 u64 后单次原子发布，\n"
+    " * 读者看到的 (limit, generation) 永远同代；与 policy 指针错配只会得到 -1。\n"
+    " */\n"
+    "/* KSU_SIDECHAN_A_ATOMIC */\n"
+    "static const struct policydb *ksu_original_types_policy;\n"
+    "static u64 ksu_original_types_view; /* low32: limit, high32: generation */\n"
+    "\n"
+    "static void ksu_original_types_publish(const struct policydb *db, u32 limit, u32 generation)\n"
+    "{\n"
+    "    WRITE_ONCE(ksu_original_types_policy, db);\n"
+    "    WRITE_ONCE(ksu_original_types_view, ((u64)generation << 32) | (u64)limit);\n"
+    "}\n"
+)
+
+if OLD_DECL not in text:
+    sys.exit("找不到 original-types 三个全局声明（上游结构可能已变化）")
+text = text.replace(OLD_DECL, NEW_DECL, 1)
+
+start = text.find("bool ksu_set_original_types(")
+end_marker = "return type_value && type_value <= original_types_limit ? 1 : 0;\n}\n"
+end = text.find(end_marker, start)
+if start < 0 or end < 0:
+    sys.exit("找不到 ksu_set_original_types / ksu_type_is_original 区域")
+end += len(end_marker)
+
+NEW_BODY = (
+    "bool ksu_set_original_types(struct policydb *db, struct policydb *orig_db, u32 policy_generation)\n"
+    "{\n"
+    "    if (!db || !orig_db || !policy_generation || orig_db->p_types.nprim > db->p_types.nprim) {\n"
+    "        ksu_original_types_publish(NULL, 0, 0);\n"
+    "        return false;\n"
+    "    }\n"
+    "\n"
+    "    ksu_original_types_publish(db, orig_db->p_types.nprim, policy_generation);\n"
+    "    return true;\n"
+    "}\n"
+    "\n"
+    "bool ksu_advance_original_types(struct policydb *db, struct policydb *old_db, u32 old_policy_generation,\n"
+    "                                u32 policy_generation)\n"
+    "{\n"
+    "    u64 view = READ_ONCE(ksu_original_types_view);\n"
+    "    u32 original_types_limit = (u32)view;\n"
+    "    u32 original_types_generation = (u32)(view >> 32);\n"
+    "\n"
+    "    if (!db || !old_db || !old_policy_generation || !policy_generation || !original_types_limit ||\n"
+    "        !original_types_generation || old_policy_generation != original_types_generation ||\n"
+    "        READ_ONCE(ksu_original_types_policy) != old_db || db->p_types.nprim < original_types_limit) {\n"
+    "        ksu_original_types_publish(NULL, 0, 0);\n"
+    "        return false;\n"
+    "    }\n"
+    "\n"
+    "    ksu_original_types_publish(db, original_types_limit, policy_generation);\n"
+    "    return true;\n"
+    "}\n"
+    "\n"
+    "int ksu_type_is_original(struct policydb *db, u32 policy_generation, u32 type_value)\n"
+    "{\n"
+    "    u64 view = READ_ONCE(ksu_original_types_view);\n"
+    "    const struct policydb *original_types_policy = READ_ONCE(ksu_original_types_policy);\n"
+    "    u32 original_types_limit = (u32)view;\n"
+    "    u32 original_types_generation = (u32)(view >> 32);\n"
+    "\n"
+    "    if (!db || !policy_generation || original_types_policy != db ||\n"
+    "        original_types_generation != policy_generation || !original_types_limit ||\n"
+    "        type_value > db->p_types.nprim)\n"
+    "        return -1;\n"
+    "\n"
+    "    return type_value && type_value <= original_types_limit ? 1 : 0;\n"
+    "}\n"
+)
+
+text = text[:start] + NEW_BODY + text[end:]
+open(path, "w", encoding="utf-8", errors="surrogateescape", newline="").write(text)
+print("  sepolicy.c: limit/generation 已合并为单次原子发布")
+PYEOF
+    grep -q 'KSU_SIDECHAN_A_ATOMIC' "$SEPOLICY_FILE" \
+      || fail "信号 A 原子发布补丁应用后校验失败 (sepolicy.c)"
+    if grep -q 'ksu_original_types_limit\|ksu_original_types_generation' "$SEPOLICY_FILE"; then
+      fail "sepolicy.c 仍残留旧的 original_types 三写路径"
+    fi
+    echo "信号 A 已收敛：original-types 视图不再撕裂，错配一律降级为 -1 重试"
+  fi
+else
+  echo "sepolicy.c 不存在或结构已变化，跳过信号 A 原子发布补丁"
+fi
+
+echo "隐藏层计时侧信道加固补丁处理完成（已处理 A/B/C；D 交由上游 #3981）"
