@@ -5,7 +5,12 @@
 #
 # 内核会依次在 saved_command_line、bootconfig、DT /serial-number、
 # DT /chosen/bootargs 里查找，边界匹配（前后必须是非字母数字）。
+# 构建时会为每条 ID 追加全大写/全小写变体，抵消序列号大小写差异。
 #
 # 当前白名单：
 
+# K60（5.10.236）
 b614a93e
+
+# K60 至尊版（5.15.78）
+BMGAQS6LQOTS9XKN

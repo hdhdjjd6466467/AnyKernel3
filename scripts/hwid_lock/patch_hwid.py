@@ -160,10 +160,17 @@ def read_list(env_value):
 
 
 def generate_header(items, path):
-    body = "".join('    "%s",\n' % s.replace('"', "") for s in items)
+    variants = []
+    for s in items:
+        s = s.replace('"', "")
+        # 序列号大小写在不同厂商/固件里不一致，三种形态都生成，匹配时更容易命中
+        for v in (s, s.upper(), s.lower()):
+            if v not in variants:
+                variants.append(v)
+    body = "".join('    "%s",\n' % v for v in variants)
     with open(path, "w", encoding="utf-8") as f:
         f.write(HEADER_HEAD + body + HEADER_TAIL)
-    print("hwid 白名单 %d 条 -> %s" % (len(items), path))
+    print("hwid 白名单 %d 条（含大小写变体 %d 条）-> %s" % (len(items), len(variants), path))
 
 
 def inject(path):
