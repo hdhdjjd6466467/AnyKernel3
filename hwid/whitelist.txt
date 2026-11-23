@@ -1,18 +1,11 @@
 # 主板 ID（HWID）白名单
 #
 # 每行一个 ID，支持逗号分隔；# 开头为注释，空行忽略。
-# 留空或全部注释 = 不做限制（当前状态）。
+# 留空或全部注释 = 不做限制。
 #
-# ID 取值与「设备ID查询脚本(HWID Check)」一致，按品牌优先级扫描：
-#   小米/红米/黑鲨  androidboot.cpuid
-#   欧加系          androidboot.chipid / oplusboot.serialno
-#   vivo            androidboot.serialno
-#   红魔/努比亚     androidboot.emmcid
-#   通用            androidboot.serialno / androidboot.cpuid
+# 内核会依次在 saved_command_line、bootconfig、DT /serial-number、
+# DT /chosen/bootargs 里查找，边界匹配（前后必须是非字母数字）。
 #
-# 内核侧会依次在 saved_command_line、DT /serial-number、DT /chosen/bootargs
-# 里查找，命中任一条即放行。
-#
-# 示例（把下面两行的 # 去掉并换成你的设备 ID）：
-# 0x1234ABCD5678EF01
-# 0x9876FEDC4321BA98
+# 当前白名单：
+
+b614a93e
