@@ -29,18 +29,22 @@ cp "$BG" "$RES/drawable/ic_launcher_splash.webp"
 cp "$BG" "$RES/drawable/app_bg.webp"
 
 # 3) 基础主题加 windowBackground，让窗口底色也是这张图
-python3 - "$RES/values/themes.xml" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding="utf-8").read()
-anchor = '    <style name="Theme.KernelSU" parent="android:Theme.Material.Light.NoActionBar">
-'
-if anchor in s and "app_bg" not in s:
+python3 - "$RES" <<'PY'
+import os, sys
+res = sys.argv[1]
+targets = [
+    (os.path.join(res, "values", "themes.xml"), '    <style name="Theme.KernelSU" parent="android:Theme.Material.Light.NoActionBar">\n'),
+    (os.path.join(res, "values-night", "themes.xml"), '    <style name="Theme.KernelSU" parent="android:Theme.Material.NoActionBar">\n'),
+]
+for path, anchor in targets:
+    if not os.path.isfile(path):
+        continue
+    s = open(path, encoding="utf-8").read()
+    if "app_bg" in s or anchor not in s:
+        continue
     s = s.replace(anchor, anchor + '        <item name="android:windowBackground">@drawable/app_bg</item>\n', 1)
-    open(p, "w", encoding="utf-8").write(s)
-    print("主题已加入 windowBackground=@drawable/app_bg")
-else:
-    print("主题无需修改或结构已变")
+    open(path, "w", encoding="utf-8").write(s)
+    print("主题已加 windowBackground: " + path)
 PY
 
 echo "皮肤应用完成：图标 + 启动图 + 主题背景"
