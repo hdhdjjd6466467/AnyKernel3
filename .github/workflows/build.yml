@@ -797,7 +797,7 @@ jobs:
       - name: 应用 PR #3938 时序方案（可选）
         if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU' && inputs.sidechan_3938
         working-directory: ${{ env.KERNEL_ROOT }}
-        run: bash "$GITHUB_WORKSPACE/scripts/sidechan_3938/apply.sh" KernelSU
+        run: bash "$GITHUB_WORKSPACE/scripts/sidechan_3938/stackbuf.sh" KernelSU
 
       # /sys/fs/selinux/access 回复里的 avd.seqno 归一化：报告里 SELinux 卡片唯一的 DANGER
       # 判据就是 Non-initial avdSeqNo（开机写布尔值推进的代际）。只改回复字段，不改判定。
