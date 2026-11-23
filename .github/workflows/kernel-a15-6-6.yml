@@ -104,7 +104,7 @@ on:
         description: "启用 一加 骁龙8 Elite/Gen5 支持"
         required: false
         type: boolean
-        default: false
+        default: true
       skip_incompatible:
         description: "功能不兼容或无法使用时自动跳过该功能（不中断构建）"
         required: false

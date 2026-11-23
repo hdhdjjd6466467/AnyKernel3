@@ -389,7 +389,7 @@ on:
         description: "启用 一加 骁龙8 Elite/Gen5 支持"
         required: false
         type: boolean
-        default: false
+        default: true
       hwid_lock:
         description: "绑定主板 ID（优先用对应内核版本的白名单，通用名单为 hwid/whitelist.txt）"
         required: false
