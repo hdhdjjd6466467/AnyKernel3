@@ -3,18 +3,14 @@
 """主板 ID（HWID）绑定。
 
 把一份 HWID 白名单编进内核，并在 KernelSU 的 setresuid 授权入口做校验：
-非白名单设备不授予任何 KSU 能力（su 不可用、管理器拿不到 fd）。
+非白名单设备不授予任何 KSU 能力。
 
-HWID 来源按优先级：
-  1. saved_command_line（/proc/cmdline）里的 androidboot.cpuid / chipid / emmcid / serialno
-  2. bootconfig（CONFIG_BOOT_CONFIG）里的同名 key
-  3. device tree 的 /serial-number
-  4. device tree 的 /chosen/bootargs
+HWID 来源（启动早期一次性解析）：saved_command_line、bootconfig、
+DT /serial-number、DT /chosen/bootargs。匹配用边界检查。
 
-匹配用边界检查（前后必须是非字母数字），避免 8 位短 ID 撞上无关的十六进制串。
-白名单为空时不做限制。
-
-退出码：0 成功或跳过；2 结构不匹配。
+注意：bootconfig 的 xbc_find_value 带 __init，只能在 early_initcall 里调用，
+运行期调用会踩已释放段（modpost 会报 section mismatch 并让构建失败）。
+因此把解析结果存进 ksu_hwid_ok，运行期只读标志。
 """
 
 import os
@@ -22,16 +18,17 @@ import sys
 
 MARK = "KSU_HWID_LOCK"
 
-HEADER_HEAD = """/*
+HEAD = """/*
  * KSU_HWID_LOCK: 主板 ID 绑定（构建时生成，勿手改）。
  *
- * 白名单为空时不做任何限制；非空时，只允许列表内的 HWID 使用 KernelSU。
+ * 白名单为空时不做任何限制。
  */
 #ifndef __KSU_HWID_LOCK_H
 #define __KSU_HWID_LOCK_H
 
 #include <linux/bootconfig.h>
 #include <linux/ctype.h>
+#include <linux/init.h>
 #include <linux/of.h>
 #include <linux/string.h>
 #include <linux/types.h>
@@ -41,7 +38,7 @@ extern char *saved_command_line;
 static const char *const ksu_hwid_whitelist[] = {
 """
 
-HEADER_TAIL = """};
+TAIL = """};
 
 #define KSU_HWID_COUNT ((int)(sizeof(ksu_hwid_whitelist) / sizeof(ksu_hwid_whitelist[0])))
 
@@ -70,7 +67,7 @@ static inline bool ksu_hwid_hit(const char *hay, const char *id)
     return false;
 }
 
-static inline bool ksu_hwid_bootconfig(const char *id)
+static bool __init ksu_hwid_bootconfig(const char *id)
 {
     static const char *const keys[] = {
         "androidboot.cpuid",
@@ -92,31 +89,42 @@ static inline bool ksu_hwid_bootconfig(const char *id)
     return false;
 }
 
-static inline bool ksu_hwid_allowed(void)
+static bool ksu_hwid_ok __read_mostly = true;
+
+static void __init ksu_hwid_resolve(void)
 {
     struct device_node *np;
     const char *prop;
     int i;
 
-    /* 白名单为空：不限制 */
-    if (KSU_HWID_COUNT == 0)
-        return true;
+    if (KSU_HWID_COUNT == 0) {
+        ksu_hwid_ok = true;
+        return;
+    }
+
+    ksu_hwid_ok = false;
 
     for (i = 0; i < KSU_HWID_COUNT; i++) {
         const char *id = ksu_hwid_whitelist[i];
 
-        if (saved_command_line && ksu_hwid_hit(saved_command_line, id))
-            return true;
-        if (ksu_hwid_bootconfig(id))
-            return true;
+        if (saved_command_line && ksu_hwid_hit(saved_command_line, id)) {
+            ksu_hwid_ok = true;
+            return;
+        }
+        if (ksu_hwid_bootconfig(id)) {
+            ksu_hwid_ok = true;
+            return;
+        }
     }
 
     np = of_find_node_by_path("/");
     if (np) {
         prop = of_get_property(np, "serial-number", NULL);
         for (i = 0; i < KSU_HWID_COUNT; i++) {
-            if (ksu_hwid_hit(prop, ksu_hwid_whitelist[i]))
-                return true;
+            if (ksu_hwid_hit(prop, ksu_hwid_whitelist[i])) {
+                ksu_hwid_ok = true;
+                return;
+            }
         }
     }
 
@@ -124,12 +132,26 @@ static inline bool ksu_hwid_allowed(void)
     if (np) {
         prop = of_get_property(np, "bootargs", NULL);
         for (i = 0; i < KSU_HWID_COUNT; i++) {
-            if (ksu_hwid_hit(prop, ksu_hwid_whitelist[i]))
-                return true;
+            if (ksu_hwid_hit(prop, ksu_hwid_whitelist[i])) {
+                ksu_hwid_ok = true;
+                return;
+            }
         }
     }
+}
 
-    return false;
+static int __init ksu_hwid_lock_init(void)
+{
+    ksu_hwid_resolve();
+    if (!ksu_hwid_ok)
+        pr_err("ksu: device not in HWID whitelist, KernelSU disabled");
+    return 0;
+}
+early_initcall(ksu_hwid_lock_init);
+
+static inline bool ksu_hwid_allowed(void)
+{
+    return ksu_hwid_ok;
 }
 
 #endif /* __KSU_HWID_LOCK_H */
@@ -162,37 +184,36 @@ def read_list(env_value):
 def generate_header(items, path):
     variants = []
     for s in items:
-        s = s.replace('"', "")
-        # 序列号大小写在不同厂商/固件里不一致，三种形态都生成，匹配时更容易命中
+        s = s.replace(chr(34), "")
         for v in (s, s.upper(), s.lower()):
             if v not in variants:
                 variants.append(v)
-    body = "".join('    "%s",\n' % v for v in variants)
+    body = "".join("    " + chr(34) + v + chr(34) + "," + chr(10) for v in variants)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(HEADER_HEAD + body + HEADER_TAIL)
-    print("hwid 白名单 %d 条（含大小写变体 %d 条）-> %s" % (len(items), len(variants), path))
+        f.write(HEAD + body + TAIL)
+    print("hwid whitelist %d ids (%d variants) -> %s" % (len(items), len(variants), path))
 
 
 def inject(path):
     text = open(path, encoding="utf-8", errors="surrogateescape").read()
     if MARK + "_GATE" in text:
-        print("%s 已含 HWID 门控，跳过" % path)
+        print("%s already gated" % path)
         return 0
 
-    text = '#include "hwid_lock.h" /* %s_GATE */\n' % MARK + text
+    text = chr(35) + "include " + chr(34) + "hwid_lock.h" + chr(34) + " /* " + MARK + "_GATE */" + chr(10) + text
 
     sig = "int ksu_handle_setresuid("
     i = text.find(sig)
     if i < 0:
-        print("%s 未找到 ksu_handle_setresuid" % path, file=sys.stderr)
+        print("%s: ksu_handle_setresuid not found" % path, file=sys.stderr)
         return 2
 
     brace = text.find("{", i)
     ins = brace + 1
-    text = text[:ins] + "\n" + GATE + text[ins:].lstrip("\n")
+    text = text[:ins] + chr(10) + GATE + text[ins:].lstrip(chr(10))
 
     open(path, "w", encoding="utf-8", errors="surrogateescape").write(text)
-    print("%s 已注入 HWID 门控" % path)
+    print("%s gated" % path)
     return 0
 
 
@@ -212,7 +233,7 @@ def main():
                 break
 
     if not target:
-        print("未找到含 ksu_handle_setresuid 的 hook 文件", file=sys.stderr)
+        print("no ksu_handle_setresuid hook file", file=sys.stderr)
         return 2
 
     items = read_list(os.environ.get("HWID_WHITELIST", ""))
@@ -220,7 +241,7 @@ def main():
     generate_header(items, header)
 
     if not items:
-        print("白名单为空，不注入门控（不限制）")
+        print("whitelist empty, no gate injected")
         return 0
 
     return inject(target)
