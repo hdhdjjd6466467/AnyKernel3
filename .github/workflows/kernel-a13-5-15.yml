@@ -74,17 +74,17 @@ on:
         description: "启用 ZRAM 压缩算法"
         required: true
         type: boolean
-        default: false
+        default: true
       use_bbg:
         description: "启用 BBG 基带保护"
         required: true
         type: boolean
-        default: false
+        default: true
       use_net_enhance:
         description: "启用 网络增强 (BBRv3 + IPSet + Qdisc + CIFS)"
         required: true
         type: boolean
-        default: false
+        default: true
       use_rekernel:
         description: "启用 Re-Kernel 驱动"
         required: false
@@ -99,7 +99,7 @@ on:
         description: "应用 CVE-2026-43499 rtmutex 修复链"
         required: false
         type: boolean
-        default: false
+        default: true
       skip_incompatible:
         description: "功能不兼容或无法使用时自动跳过该功能（不中断构建）"
         required: false
@@ -146,7 +146,7 @@ on:
       cve_2026_43499_patch:
         required: false
         type: boolean
-        default: false
+        default: true
       ksu_mode:
         required: false
         type: string

@@ -359,17 +359,17 @@ on:
         description: "启用 ZRAM 压缩算法（仅 5.10~6.6，6.12/6.18 不支持）"
         required: true
         type: boolean
-        default: false
+        default: true
       use_bbg:
         description: "启用 BBG 基带保护"
         required: true
         type: boolean
-        default: false
+        default: true
       use_net_enhance:
         description: "启用 网络增强 (BBRv3 + IPSet + Qdisc + CIFS)"
         required: true
         type: boolean
-        default: false
+        default: true
       use_rekernel:
         description: "启用 Re-Kernel 驱动"
         required: false
@@ -384,7 +384,7 @@ on:
         description: "应用 CVE-2026-43499 rtmutex 修复链"
         required: false
         type: boolean
-        default: false
+        default: true
       supp_op:
         description: "启用 一加 骁龙8 Elite/Gen5 支持"
         required: false
