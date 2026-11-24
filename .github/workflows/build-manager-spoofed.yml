@@ -19,20 +19,20 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: 准备 Android SDK（用 runner 预装的 sdkmanager）
+      - name: 准备 Android SDK（v3.4.2 只需 API 36）
         run: |
           SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
           SM="$(find "$SDK/cmdline-tools" -maxdepth 3 -name sdkmanager -type f | head -n1)"
           echo "sdkmanager: $SM"
           yes | "$SM" --licenses >/dev/null 2>&1 || true
-          "$SM" --channel=3 "platforms;android-37" "build-tools;37.0.0" "platform-tools" >/dev/null || \
-          "$SM" "platforms;android-37" "build-tools;37.0.0" "platform-tools" >/dev/null
+          "$SM" "platforms;android-36" "build-tools;36.1.0" "platform-tools" >/dev/null || \
+          "$SM" "platforms;android-36" "build-tools;36.0.0" "platform-tools" >/dev/null
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
       - name: 克隆 KernelSU-Next（含 spoof 脚本）
         run: |
-          git clone --depth 1 -b dev https://github.com/KernelSU-Next/KernelSU-Next.git ksunext
+          git clone --depth 1 -b v3.4.2 https://github.com/KernelSU-Next/KernelSU-Next.git ksunext
           test -d ksunext/manager
           test -f ksunext/manager/spoof
 
