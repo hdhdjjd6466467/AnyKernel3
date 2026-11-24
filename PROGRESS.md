@@ -22,6 +22,7 @@
 | `8a1dc19` | 恢复被截断的 `build.yml`（112KB→51KB 事故）并重新接线 `ak3_name_prefix` | `build.yml` |
 | `c4a8fb4` | 5.10 适配一加：`a12-5-10` / `a13-5-10` 的 `supp_op` 改 true | `kernel-a12-5-10.yml`、`kernel-a13-5-10.yml` |
 | `d479468` | `use_zram` / `use_bbg` / `use_net_enhance` / `cve_2026_43499_patch` 默认全部 true；a16/a17 的硬编码 `use_zram: false` 改 true | 全部 workflow + `main.yml` |
+| 待提交 | #3877 同源失败路径对齐：未知 user/role 早退 + attr/current 换行短路（对齐 tiann/KernelSU #3877 = KernelSU-Next v3.4.2 #1601） | `scripts/sidechan_3877/apply.sh`、`build.yml` |
 
 另有一个被取代的中间提交 `329ccb4`（补丁失败即跳过），已被 `9569f25` 替换，不要再回退到那个行为。
 
@@ -80,5 +81,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 | 信号 B | `kernel/feature/selinux_hide.c` | `KSU_SIDECHAN_B_GUARD` |
 | 信号 C | `kernel/hook/syscall_hook_manager.c` | `KSU_SIDECHAN_C_GATE` |
 | avd.seqno | `security/selinux/selinuxfs.c: sel_write_access()` | `KSU_AVDSEQNO_ZERO` |
+| #3877-E 失败路径早退 | `kernel/feature/selinux_hide.c` `string_to_context_struct()` user/role 段 | `KSU_SIDECHAN_3877_FASTFAIL` |
+| #3877-F 换行短路 | `kernel/feature/selinux_hide.c` `my_setprocattr()` | `KSU_SIDECHAN_3877_NEWLINE` |
 
 以上标记都可在产物日志里 `grep` 到，用来判断补丁是真打上还是被跳过。

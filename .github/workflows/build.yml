@@ -126,6 +126,11 @@ on:
         required: false
         type: boolean
         default: true
+      sidechan_3877:
+        description: "对齐 tiann/KernelSU #3877：未知 user/role 早退 + attr/current 换行短路（默认开）"
+        required: false
+        type: boolean
+        default: true
       droidspaces:
         required: false
         type: string
@@ -802,6 +807,16 @@ jobs:
         env:
           SKIP_INCOMPATIBLE: "false"   # 打不上就失败，不允许静默跳过
         run: bash "$GITHUB_WORKSPACE/scripts/sidechan_3938/stackbuf.sh" KernelSU
+
+      # tiann/KernelSU #3877（KernelSU-Next v3.4.2 的 #1601）同源补丁：把「未知 user/role
+      # 立即返回」和 attr/current 的换行短路补回 stock 形状，消掉失败路径上随 context
+      # 长度增长的额外耗时，以及换算子写 "\n" 时省掉 cred 分配带来的方向性偏差。
+      - name: 应用 #3877 同源时序对齐补丁（未知字段早退 / 换行短路）
+        if: inputs.ksu_variant == 'SukiSU-Nova' && inputs.ksu_mode != '禁用KSU' && inputs.sidechan_3877
+        working-directory: ${{ env.KERNEL_ROOT }}
+        env:
+          SKIP_INCOMPATIBLE: "false"   # 打不上就失败，不允许静默跳过
+        run: bash "$GITHUB_WORKSPACE/scripts/sidechan_3877/apply.sh" KernelSU
 
       # /sys/fs/selinux/access 回复里的 avd.seqno 归一化：报告里 SELinux 卡片唯一的 DANGER
       # 判据就是 Non-initial avdSeqNo（开机写布尔值推进的代际）。只改回复字段，不改判定。
